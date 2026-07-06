@@ -4,7 +4,14 @@ import unittest
 from decimal import Decimal
 from pathlib import Path
 
-from agent_firewall import DecisionKind, Policy, PolicyConfigError, ToolCall, Usage
+from agent_firewall import (
+    ArgumentAuditMode,
+    DecisionKind,
+    Policy,
+    PolicyConfigError,
+    ToolCall,
+    Usage,
+)
 
 
 class PolicyTests(unittest.TestCase):
@@ -113,6 +120,15 @@ class PolicyTests(unittest.TestCase):
                     ]
                 }
             )
+
+    def test_argument_auditing_defaults_to_none(self):
+        policy = Policy.from_dict({})
+
+        self.assertEqual(policy.audit_arguments, ArgumentAuditMode.NONE)
+
+    def test_invalid_argument_audit_mode_is_rejected(self):
+        with self.assertRaisesRegex(PolicyConfigError, "audit_arguments"):
+            Policy.from_dict({"audit_arguments": "unsafe"})
 
     def test_total_call_budget_blocks_next_call(self):
         policy = Policy.from_dict(

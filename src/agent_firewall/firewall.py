@@ -216,6 +216,7 @@ class Firewall:
                 usage or self.usage,
                 decision=decision,
                 error=error,
+                argument_mode=self.policy.audit_arguments,
             )
 
 

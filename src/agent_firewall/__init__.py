@@ -3,7 +3,7 @@
 from .audit import JsonlAuditLog
 from .exceptions import ApprovalRequired, FirewallError, ToolCallBlocked
 from .firewall import Firewall
-from .models import Decision, DecisionKind, ToolCall, Usage
+from .models import ArgumentAuditMode, Decision, DecisionKind, ToolCall, Usage
 from .policy import Budget, Policy, PolicyConfigError, Rule
 
 __version__ = "0.1.0"
@@ -22,4 +22,5 @@ __all__ = [
     "ToolCallBlocked",
     "Usage",
     "ApprovalRequired",
+    "ArgumentAuditMode",
 ]

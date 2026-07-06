@@ -7,7 +7,7 @@ from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional
 
-from .models import Decision, DecisionKind, ToolCall, Usage, money
+from .models import ArgumentAuditMode, Decision, DecisionKind, ToolCall, Usage, money
 
 
 class PolicyConfigError(ValueError):
@@ -35,6 +35,7 @@ class Policy:
     default_decision: DecisionKind
     budget: Budget
     rules: List[Rule]
+    audit_arguments: ArgumentAuditMode = ArgumentAuditMode.NONE
 
     @classmethod
     def load(cls, path: Path) -> "Policy":
@@ -55,6 +56,7 @@ class Policy:
 
         default = _decision(raw.get("default_decision", "block"), "default_decision")
         budget = _budget(raw.get("budget", {}))
+        audit_arguments = _audit_mode(raw.get("audit_arguments", "none"))
         rules_raw = raw.get("rules", [])
         if not isinstance(rules_raw, list):
             raise PolicyConfigError("rules must be a list")
@@ -88,7 +90,12 @@ class Policy:
                     arguments=dict(arguments),
                 )
             )
-        return cls(default_decision=default, budget=budget, rules=rules)
+        return cls(
+            default_decision=default,
+            budget=budget,
+            rules=rules,
+            audit_arguments=audit_arguments,
+        )
 
     def evaluate(self, call: ToolCall, usage: Usage) -> Decision:
         budget_decision = self._check_budget(call, usage)
@@ -156,6 +163,16 @@ def _decision(value: Any, field: str) -> DecisionKind:
     except (TypeError, ValueError) as exc:
         allowed = ", ".join(item.value for item in DecisionKind)
         raise PolicyConfigError("{} must be one of: {}".format(field, allowed)) from exc
+
+
+def _audit_mode(value: Any) -> ArgumentAuditMode:
+    try:
+        return ArgumentAuditMode(value)
+    except (TypeError, ValueError) as exc:
+        allowed = ", ".join(item.value for item in ArgumentAuditMode)
+        raise PolicyConfigError(
+            "audit_arguments must be one of: {}".format(allowed)
+        ) from exc
 
 
 def _budget(raw: Any) -> Budget:

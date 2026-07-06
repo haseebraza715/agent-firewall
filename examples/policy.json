@@ -1,5 +1,6 @@
 {
   "default_decision": "block",
+  "audit_arguments": "hash",
   "budget": {
     "max_calls": 10,
     "max_calls_per_tool": 3,

@@ -15,6 +15,13 @@ class DecisionKind(str, Enum):
     REQUIRE_APPROVAL = "require_approval"
 
 
+class ArgumentAuditMode(str, Enum):
+    NONE = "none"
+    HASH = "hash"
+    REDACTED = "redacted"
+    FULL = "full"
+
+
 def money(value: Any) -> Decimal:
     try:
         amount = Decimal(str(value))
