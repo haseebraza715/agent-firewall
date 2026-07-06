@@ -6,7 +6,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from .models import Decision, ToolCall
 
@@ -26,9 +26,9 @@ class ApprovalRecord:
     reason: str
     requested_at: str
     status: str
-    decided_at: Optional[str]
+    decided_at: str | None
 
-    def as_dict(self) -> Dict[str, Any]:
+    def as_dict(self) -> dict[str, Any]:
         return {
             "call_id": self.call_id,
             "tool": self.tool,
@@ -84,7 +84,7 @@ class SQLiteApprovalQueue:
             )
         return self.get(call.id)
 
-    def pending(self) -> List[ApprovalRecord]:
+    def pending(self) -> list[ApprovalRecord]:
         with self._connect() as connection:
             rows = connection.execute(
                 """
@@ -127,9 +127,7 @@ class SQLiteApprovalQueue:
                 connection.commit()
                 return self.get(call_id)
             if current != "pending":
-                raise ApprovalConflict(
-                    "approval was already decided as {}".format(current)
-                )
+                raise ApprovalConflict(f"approval was already decided as {current}")
             connection.execute(
                 """
                 UPDATE approvals

@@ -6,9 +6,10 @@ import secrets
 from collections import Counter, deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 from urllib.parse import unquote, urlparse
 
+from ._version import __version__
 from .approvals import ApprovalConflict, ApprovalNotFound, SQLiteApprovalQueue
 from .policy import Policy
 from .state import SQLiteStateStore
@@ -22,7 +23,7 @@ class Dashboard:
         state_path: Path,
         host: str = "127.0.0.1",
         port: int = 8787,
-        token: Optional[str] = None,
+        token: str | None = None,
     ) -> None:
         if not _is_loopback(host):
             raise ValueError("dashboard host must be a loopback address")
@@ -37,18 +38,20 @@ class Dashboard:
     @property
     def address(self) -> str:
         host, port = self.server.server_address[:2]
-        return "http://{}:{}".format(host, port)
+        if isinstance(host, bytes):
+            host = host.decode("ascii")
+        return f"http://{host}:{port}"
 
     def serve_forever(self) -> None:
-        print("Agent Firewall dashboard: {}".format(self.address), flush=True)
+        print(f"Agent Firewall dashboard: {self.address}", flush=True)
         self.server.serve_forever()
 
     def close(self) -> None:
         self.server.shutdown()
         self.server.server_close()
 
-    def summary(self) -> Dict[str, Any]:
-        events = read_events(self.audit_path)
+    def summary(self) -> dict[str, Any]:
+        events = read_events(self.audit_path, limit=None)
         counts = Counter(event.get("event") for event in events)
         usage = self.state.usage()
         return {
@@ -68,8 +71,11 @@ class Dashboard:
         }
 
 
-def read_events(path: Path, limit: int = 200) -> List[Dict[str, Any]]:
-    events: deque = deque(maxlen=limit)
+def read_events(
+    path: Path,
+    limit: int | None = 200,
+) -> list[dict[str, Any]]:
+    events: deque[dict[str, Any]] = deque(maxlen=limit)
     try:
         with path.open(encoding="utf-8") as handle:
             for line in handle:
@@ -84,9 +90,9 @@ def read_events(path: Path, limit: int = 200) -> List[Dict[str, Any]]:
     return list(events)
 
 
-def _handler(dashboard: Dashboard):
+def _handler(dashboard: Dashboard) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
-        server_version = "AgentFirewall/0.1"
+        server_version = f"AgentFirewall/{__version__}"
 
         def do_GET(self) -> None:
             path = urlparse(self.path).path
@@ -112,8 +118,7 @@ def _handler(dashboard: Dashboard):
                     200,
                     {
                         "approvals": [
-                            record.as_dict()
-                            for record in dashboard.approvals.pending()
+                            record.as_dict() for record in dashboard.approvals.pending()
                         ]
                     },
                 )
@@ -132,9 +137,7 @@ def _handler(dashboard: Dashboard):
             ):
                 self._json(403, {"error": "invalid dashboard token"})
                 return
-            if not self.headers.get("Content-Type", "").startswith(
-                "application/json"
-            ):
+            if not self.headers.get("Content-Type", "").startswith("application/json"):
                 self._json(415, {"error": "content type must be application/json"})
                 return
             try:
@@ -168,9 +171,7 @@ def _handler(dashboard: Dashboard):
         def _json(self, status: int, value: Any) -> None:
             self._send(
                 status,
-                json.dumps(value, separators=(",", ":"), default=str).encode(
-                    "utf-8"
-                ),
+                json.dumps(value, separators=(",", ":"), default=str).encode("utf-8"),
                 "application/json",
             )
 
@@ -179,7 +180,7 @@ def _handler(dashboard: Dashboard):
             status: int,
             body: bytes,
             content_type: str,
-            nonce: Optional[str] = None,
+            nonce: str | None = None,
         ) -> None:
             self.send_response(status)
             self.send_header("Content-Type", content_type)
@@ -189,9 +190,7 @@ def _handler(dashboard: Dashboard):
             self.send_header("X-Frame-Options", "DENY")
             policy = "default-src 'none'; connect-src 'self'"
             if nonce:
-                policy += "; style-src 'nonce-{}'; script-src 'nonce-{}'".format(
-                    nonce, nonce
-                )
+                policy += f"; style-src 'nonce-{nonce}'; script-src 'nonce-{nonce}'"
             self.send_header("Content-Security-Policy", policy)
             self.end_headers()
             self.wfile.write(body)

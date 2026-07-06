@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
 from threading import Lock
-from typing import Dict, Protocol
+from typing import Protocol
 
 from .models import Decision, DecisionKind, ToolCall, Usage
 from .policy import Policy
@@ -18,16 +18,14 @@ class StateResult:
 
 
 class StateStore(Protocol):
-    def usage(self) -> Usage:
-        ...
+    def usage(self) -> Usage: ...
 
     def evaluate_and_reserve(
         self,
         policy: Policy,
         call: ToolCall,
         approved: bool = False,
-    ) -> StateResult:
-        ...
+    ) -> StateResult: ...
 
 
 class MemoryStateStore:
@@ -122,13 +120,11 @@ class SQLiteStateStore:
         row = connection.execute(
             "SELECT tool_calls, estimated_cost_usd FROM run_usage WHERE id = 1"
         ).fetchone()
-        tools: Dict[str, int] = dict(
+        tools: dict[str, int] = dict(
             connection.execute("SELECT tool, call_count FROM tool_usage")
         )
-        fingerprints: Dict[str, int] = dict(
-            connection.execute(
-                "SELECT fingerprint, call_count FROM fingerprint_usage"
-            )
+        fingerprints: dict[str, int] = dict(
+            connection.execute("SELECT fingerprint, call_count FROM fingerprint_usage")
         )
         return Usage(
             tool_calls=int(row[0]),

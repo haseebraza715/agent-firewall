@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 from enum import Enum
-from typing import Any, Dict, Mapping, Optional
+from typing import Any
 from uuid import uuid4
 
 
@@ -42,10 +43,10 @@ class ToolCall:
     @classmethod
     def create(
         cls,
-        name: str,
-        arguments: Optional[Mapping[str, Any]] = None,
+        name: Any,
+        arguments: Mapping[str, Any] | None = None,
         estimated_cost_usd: Any = 0,
-    ) -> "ToolCall":
+    ) -> ToolCall:
         if not isinstance(name, str) or not name.strip():
             raise ValueError("tool name must be a non-empty string")
         return cls(
@@ -71,10 +72,10 @@ class Decision:
     kind: DecisionKind
     reason: str
     code: str
-    rule_index: Optional[int] = None
+    rule_index: int | None = None
 
-    def as_dict(self) -> Dict[str, Any]:
-        result: Dict[str, Any] = {
+    def as_dict(self) -> dict[str, Any]:
+        result: dict[str, Any] = {
             "decision": self.kind.value,
             "reason": self.reason,
             "code": self.code,
@@ -88,8 +89,8 @@ class Decision:
 class Usage:
     tool_calls: int = 0
     estimated_cost_usd: Decimal = Decimal("0")
-    calls_by_tool: Dict[str, int] = field(default_factory=dict)
-    calls_by_fingerprint: Dict[str, int] = field(default_factory=dict)
+    calls_by_tool: dict[str, int] = field(default_factory=dict)
+    calls_by_fingerprint: dict[str, int] = field(default_factory=dict)
 
     def record(self, call: ToolCall) -> None:
         self.tool_calls += 1
@@ -100,7 +101,7 @@ class Usage:
             self.calls_by_fingerprint.get(fingerprint, 0) + 1
         )
 
-    def copy(self) -> "Usage":
+    def copy(self) -> Usage:
         return Usage(
             tool_calls=self.tool_calls,
             estimated_cost_usd=self.estimated_cost_usd,

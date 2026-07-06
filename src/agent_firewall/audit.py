@@ -4,7 +4,7 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock
-from typing import Any, Dict, Optional
+from typing import Any
 
 from .models import ArgumentAuditMode, Decision, ToolCall, Usage
 
@@ -21,11 +21,11 @@ class JsonlAuditLog:
         event: str,
         call: ToolCall,
         usage: Usage,
-        decision: Optional[Decision] = None,
-        error: Optional[str] = None,
+        decision: Decision | None = None,
+        error: str | None = None,
         argument_mode: ArgumentAuditMode = ArgumentAuditMode.NONE,
     ) -> None:
-        entry: Dict[str, Any] = {
+        entry: dict[str, Any] = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "event": event,
             "call_id": call.id,

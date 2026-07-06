@@ -1,28 +1,37 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "agent-firewall"
-version = "0.1.0"
-description = "A small runtime policy guard for AI-agent tool calls."
+version = "0.2.0"
+description = "Local runtime policy enforcement for AI-agent tool calls."
 readme = "README.md"
 requires-python = ">=3.9"
-license = { text = "MIT" }
+license = "MIT"
 authors = [{ name = "Haseeb Raza" }]
 keywords = ["ai-agents", "guardrails", "security", "tool-calling"]
 classifiers = [
   "Development Status :: 3 - Alpha",
-  "License :: OSI Approved :: MIT License",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3 :: Only",
   "Programming Language :: Python :: 3.9",
   "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
   "Topic :: Security",
 ]
 dependencies = []
+
+[project.optional-dependencies]
+dev = [
+  "build>=1.2",
+  "coverage[toml]>=7.6",
+  "mypy>=1.10",
+  "ruff>=0.8",
+  "twine>=5.1",
+]
 
 [project.scripts]
 agent-firewall = "agent_firewall.cli:main"
@@ -33,3 +42,27 @@ Issues = "https://github.com/haseebraza715/agent-firewall/issues"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.ruff]
+target-version = "py39"
+line-length = 88
+
+[tool.ruff.lint]
+select = ["B", "E", "F", "I", "UP"]
+
+[tool.ruff.lint.per-file-ignores]
+"src/agent_firewall/dashboard.py" = ["E501"]
+
+[tool.mypy]
+python_version = "3.9"
+strict = true
+warn_unreachable = true
+
+[tool.coverage.run]
+branch = true
+source = ["agent_firewall"]
+
+[tool.coverage.report]
+fail_under = 74
+show_missing = true
+skip_covered = true

@@ -185,11 +185,18 @@ the audit destination is trusted.
 
 ## Replay real complaints
 
-The included scenarios model:
+The included corpus models ten public reports plus one synthetic cost-cap
+check. The [Agent Incident Wall](docs/incidents/README.md) maps every public
+report to the smallest deterministic policy that would have stopped or paused
+the action.
+
+Examples include:
 
 - [LangGraph database-query loop #6731](https://github.com/langchain-ai/langgraph/issues/6731)
 - [LangChain repeated side-effecting tool call #16712](https://github.com/langchain-ai/langchain/issues/16712)
 - [LangGraph human-approval bypass #6053](https://github.com/langchain-ai/langgraph/issues/6053)
+- [Cline destructive restore #1213](https://github.com/cline/cline/issues/1213)
+- [MCP browser SSRF advisory #3662](https://github.com/modelcontextprotocol/servers/issues/3662)
 
 Run them with:
 

@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import inspect
+from collections.abc import Awaitable, Mapping
 from functools import wraps
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Mapping, Optional, Union
+from typing import Any, Callable, Union
 
 from .audit import JsonlAuditLog
 from .exceptions import ApprovalRequired, ToolCallBlocked
@@ -19,9 +20,9 @@ class Firewall:
     def __init__(
         self,
         policy: Policy,
-        approver: Optional[Approver] = None,
-        audit_log: Optional[JsonlAuditLog] = None,
-        state_store: Optional[StateStore] = None,
+        approver: Approver | None = None,
+        audit_log: JsonlAuditLog | None = None,
+        state_store: StateStore | None = None,
     ) -> None:
         self.policy = policy
         self.approver = approver
@@ -32,10 +33,10 @@ class Firewall:
     def from_policy_file(
         cls,
         policy_path: Path,
-        approver: Optional[Approver] = None,
-        audit_path: Optional[Path] = None,
-        state_path: Optional[Path] = None,
-    ) -> "Firewall":
+        approver: Approver | None = None,
+        audit_path: Path | None = None,
+        state_path: Path | None = None,
+    ) -> Firewall:
         audit_log = JsonlAuditLog(audit_path) if audit_path else None
         state_store = SQLiteStateStore(state_path) if state_path else None
         return cls(
@@ -52,7 +53,7 @@ class Firewall:
     def check(
         self,
         tool_name: str,
-        arguments: Optional[Mapping[str, Any]] = None,
+        arguments: Mapping[str, Any] | None = None,
         estimated_cost_usd: Any = 0,
     ) -> Decision:
         call = ToolCall.create(tool_name, arguments, estimated_cost_usd)
@@ -64,19 +65,36 @@ class Firewall:
         tool: Callable[..., Any],
         *args: Any,
         estimated_cost_usd: Any = 0,
-        **kwargs: Any
+        **kwargs: Any,
     ) -> Any:
         call = ToolCall.create(
             tool_name,
             _call_arguments(args, kwargs),
             estimated_cost_usd,
         )
+        return self._execute_sync(call, lambda: tool(*args, **kwargs))
+
+    def call_with_arguments(
+        self,
+        tool_name: str,
+        arguments: Mapping[str, Any],
+        operation: Callable[[], Any],
+        estimated_cost_usd: Any = 0,
+    ) -> Any:
+        call = ToolCall.create(tool_name, arguments, estimated_cost_usd)
+        return self._execute_sync(call, operation)
+
+    def _execute_sync(
+        self,
+        call: ToolCall,
+        operation: Callable[[], Any],
+    ) -> Any:
         decision = self._authorize(call)
         if decision.kind is DecisionKind.REQUIRE_APPROVAL:
             self._approve_sync(call, decision)
 
         try:
-            result = tool(*args, **kwargs)
+            result = operation()
         except Exception as exc:
             self._audit("failed", call, decision, type(exc).__name__)
             raise
@@ -89,19 +107,36 @@ class Firewall:
         tool: Callable[..., Any],
         *args: Any,
         estimated_cost_usd: Any = 0,
-        **kwargs: Any
+        **kwargs: Any,
     ) -> Any:
         call = ToolCall.create(
             tool_name,
             _call_arguments(args, kwargs),
             estimated_cost_usd,
         )
+        return await self._execute_async(call, lambda: tool(*args, **kwargs))
+
+    async def acall_with_arguments(
+        self,
+        tool_name: str,
+        arguments: Mapping[str, Any],
+        operation: Callable[[], Any],
+        estimated_cost_usd: Any = 0,
+    ) -> Any:
+        call = ToolCall.create(tool_name, arguments, estimated_cost_usd)
+        return await self._execute_async(call, operation)
+
+    async def _execute_async(
+        self,
+        call: ToolCall,
+        operation: Callable[[], Any],
+    ) -> Any:
         decision = self._authorize(call)
         if decision.kind is DecisionKind.REQUIRE_APPROVAL:
             await self._approve_async(call, decision)
 
         try:
-            result = tool(*args, **kwargs)
+            result = operation()
             if inspect.isawaitable(result):
                 result = await result
         except Exception as exc:
@@ -125,7 +160,7 @@ class Firewall:
                     tool,
                     *args,
                     estimated_cost_usd=estimated_cost_usd,
-                    **kwargs
+                    **kwargs,
                 )
 
             return async_guarded
@@ -133,11 +168,7 @@ class Firewall:
         @wraps(tool)
         def guarded(*args: Any, **kwargs: Any) -> Any:
             return self.call(
-                tool_name,
-                tool,
-                *args,
-                estimated_cost_usd=estimated_cost_usd,
-                **kwargs
+                tool_name, tool, *args, estimated_cost_usd=estimated_cost_usd, **kwargs
             )
 
         return guarded
@@ -209,8 +240,8 @@ class Firewall:
         event: str,
         call: ToolCall,
         decision: Decision,
-        error: Optional[str] = None,
-        usage: Optional[Usage] = None,
+        error: str | None = None,
+        usage: Usage | None = None,
     ) -> None:
         if self.audit_log is not None:
             self.audit_log.record(

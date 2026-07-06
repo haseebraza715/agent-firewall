@@ -35,6 +35,36 @@
       "tool": "filesystem.read",
       "decision": "allow",
       "reason": "read-only file access is allowed"
+    },
+    {
+      "tool": "search.web",
+      "decision": "allow",
+      "reason": "web search is allowed within runtime budgets"
+    },
+    {
+      "tool": "shell.run",
+      "decision": "allow",
+      "reason": "demo shell calls are constrained by repetition budgets"
+    },
+    {
+      "tool": "model.generate",
+      "decision": "allow",
+      "reason": "backend retries are constrained by repetition budgets"
+    },
+    {
+      "tool": "agent.delegate",
+      "decision": "allow",
+      "reason": "delegation is constrained by repetition budgets"
+    },
+    {
+      "tool": "filesystem.delete",
+      "decision": "require_approval",
+      "reason": "file deletion is irreversible"
+    },
+    {
+      "tool": "filesystem.write",
+      "decision": "require_approval",
+      "reason": "file overwrite requires review"
     }
   ]
 }

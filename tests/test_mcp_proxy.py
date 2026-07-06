@@ -58,9 +58,7 @@ class McpProxyTests(unittest.TestCase):
         responses = self.run_proxy(
             {
                 "default_decision": "block",
-                "rules": [
-                    {"tool": "database.query", "decision": "allow"}
-                ],
+                "rules": [{"tool": "database.query", "decision": "allow"}],
             },
             [
                 {
@@ -77,6 +75,33 @@ class McpProxyTests(unittest.TestCase):
 
         content = responses[0]["result"]["content"][0]["text"]
         self.assertEqual(json.loads(content), {"sql": "select 1"})
+
+    def test_reserved_firewall_parameter_names_remain_opaque_arguments(self):
+        arguments = {
+            "tool": "inner-tool",
+            "tool_name": "inner-name",
+            "estimated_cost_usd": "opaque-value",
+        }
+        responses = self.run_proxy(
+            {
+                "default_decision": "block",
+                "rules": [{"tool": "database.query", "decision": "allow"}],
+            },
+            [
+                {
+                    "jsonrpc": "2.0",
+                    "id": "opaque",
+                    "method": "tools/call",
+                    "params": {
+                        "name": "database.query",
+                        "arguments": arguments,
+                    },
+                }
+            ],
+        )
+
+        content = responses[0]["result"]["content"][0]["text"]
+        self.assertEqual(json.loads(content), arguments)
 
     def test_blocked_tool_returns_json_rpc_policy_error(self):
         responses = self.run_proxy(
@@ -121,6 +146,55 @@ class McpProxyTests(unittest.TestCase):
         self.assertEqual(
             by_id[2]["error"]["data"]["code"],
             "max_identical_calls",
+        )
+
+    def test_duplicate_in_flight_id_returns_error_and_proxy_stays_alive(self):
+        responses = self.run_proxy(
+            {"default_decision": "allow"},
+            [
+                {
+                    "jsonrpc": "2.0",
+                    "id": "duplicate",
+                    "method": "tools/call",
+                    "params": {
+                        "name": "database.query",
+                        "arguments": {"delay_seconds": 0.1},
+                    },
+                },
+                {
+                    "jsonrpc": "2.0",
+                    "id": "duplicate",
+                    "method": "tools/call",
+                    "params": {
+                        "name": "database.query",
+                        "arguments": {"sql": "select duplicate"},
+                    },
+                },
+                {
+                    "jsonrpc": "2.0",
+                    "id": "after-duplicate",
+                    "method": "tools/call",
+                    "params": {
+                        "name": "database.query",
+                        "arguments": {"sql": "select alive"},
+                    },
+                },
+            ],
+        )
+
+        duplicate_responses = [
+            response for response in responses if response["id"] == "duplicate"
+        ]
+        self.assertEqual(len(duplicate_responses), 2)
+        errors = [
+            response["error"] for response in duplicate_responses if "error" in response
+        ]
+        self.assertEqual(errors[0]["code"], -32600)
+        self.assertTrue(
+            any(
+                response["id"] == "after-duplicate" and "result" in response
+                for response in responses
+            )
         )
 
     def test_approval_rule_fails_closed_without_terminal_flag(self):
@@ -197,7 +271,10 @@ class McpProxyTests(unittest.TestCase):
                 "jsonrpc": "2.0",
                 "id": 9,
                 "method": "tools/call",
-                "params": {"name": "email.send", "arguments": {"to": "person@example.com"}},
+                "params": {
+                    "name": "email.send",
+                    "arguments": {"to": "person@example.com"},
+                },
             }
             process.stdin.write(json.dumps(request) + "\n")
             process.stdin.flush()

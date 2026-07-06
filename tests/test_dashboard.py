@@ -72,6 +72,26 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(summary["estimated_cost_usd"], "0.25")
         self.assertEqual(summary["max_cost_usd"], "1.00")
 
+    def test_summary_counts_entire_audit_file(self):
+        with self.audit_path.open("w", encoding="utf-8") as handle:
+            for index in range(250):
+                handle.write(
+                    json.dumps(
+                        {
+                            "timestamp": str(index),
+                            "event": "allowed",
+                            "tool": "search",
+                        }
+                    )
+                    + "\n"
+                )
+
+        summary = self.dashboard.summary()
+        recent = self.get_json("/api/events")
+
+        self.assertEqual(summary["allowed"], 250)
+        self.assertEqual(len(recent["events"]), 200)
+
     def test_pending_approval_can_be_approved_idempotently(self):
         call = self.add_pending_approval()
 
@@ -112,10 +132,12 @@ class DashboardTests(unittest.TestCase):
         with urlopen(self.dashboard.address + "/", timeout=2) as response:
             page = response.read().decode("utf-8")
             policy = response.headers["Content-Security-Policy"]
+            server = response.headers["Server"]
 
         self.assertIn("Agent Firewall", page)
         self.assertIn("default-src 'none'", policy)
         self.assertEqual(response.headers["X-Frame-Options"], "DENY")
+        self.assertTrue(server.startswith("AgentFirewall/0.2.0"))
 
     def test_non_loopback_binding_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "loopback"):

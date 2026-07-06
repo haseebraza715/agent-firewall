@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from decimal import Decimal
 from fnmatch import fnmatchcase
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional
+from typing import Any
 
 from .models import ArgumentAuditMode, Decision, DecisionKind, ToolCall, Usage, money
 
@@ -16,10 +17,10 @@ class PolicyConfigError(ValueError):
 
 @dataclass(frozen=True)
 class Budget:
-    max_calls: Optional[int] = None
-    max_calls_per_tool: Optional[int] = None
-    max_identical_calls: Optional[int] = None
-    max_cost_usd: Optional[Decimal] = None
+    max_calls: int | None = None
+    max_calls_per_tool: int | None = None
+    max_identical_calls: int | None = None
+    max_cost_usd: Decimal | None = None
 
 
 @dataclass(frozen=True)
@@ -34,23 +35,23 @@ class Rule:
 class Policy:
     default_decision: DecisionKind
     budget: Budget
-    rules: List[Rule]
+    rules: list[Rule]
     audit_arguments: ArgumentAuditMode = ArgumentAuditMode.NONE
 
     @classmethod
-    def load(cls, path: Path) -> "Policy":
+    def load(cls, path: Path) -> Policy:
         try:
             raw = json.loads(path.read_text(encoding="utf-8"))
         except OSError as exc:
-            raise PolicyConfigError("cannot read policy: {}".format(exc)) from exc
+            raise PolicyConfigError(f"cannot read policy: {exc}") from exc
         except json.JSONDecodeError as exc:
             raise PolicyConfigError(
-                "invalid JSON at line {}, column {}".format(exc.lineno, exc.colno)
+                f"invalid JSON at line {exc.lineno}, column {exc.colno}"
             ) from exc
         return cls.from_dict(raw)
 
     @classmethod
-    def from_dict(cls, raw: Mapping[str, Any]) -> "Policy":
+    def from_dict(cls, raw: Mapping[str, Any]) -> Policy:
         if not isinstance(raw, dict):
             raise PolicyConfigError("policy must be a JSON object")
 
@@ -61,30 +62,28 @@ class Policy:
         if not isinstance(rules_raw, list):
             raise PolicyConfigError("rules must be a list")
 
-        rules: List[Rule] = []
+        rules: list[Rule] = []
         for index, item in enumerate(rules_raw):
             if not isinstance(item, dict):
-                raise PolicyConfigError("rules[{}] must be an object".format(index))
+                raise PolicyConfigError(f"rules[{index}] must be an object")
             tool = item.get("tool")
             if not isinstance(tool, str) or not tool.strip():
                 raise PolicyConfigError(
-                    "rules[{}].tool must be a non-empty string".format(index)
+                    f"rules[{index}].tool must be a non-empty string"
                 )
             reason = item.get("reason", "matched policy rule")
             if not isinstance(reason, str) or not reason.strip():
                 raise PolicyConfigError(
-                    "rules[{}].reason must be a non-empty string".format(index)
+                    f"rules[{index}].reason must be a non-empty string"
                 )
             arguments = item.get("arguments", {})
             if not isinstance(arguments, dict):
-                raise PolicyConfigError(
-                    "rules[{}].arguments must be an object".format(index)
-                )
+                raise PolicyConfigError(f"rules[{index}].arguments must be an object")
             rules.append(
                 Rule(
                     tool=tool,
                     decision=_decision(
-                        item.get("decision"), "rules[{}].decision".format(index)
+                        item.get("decision"), f"rules[{index}].decision"
                     ),
                     reason=reason,
                     arguments=dict(arguments),
@@ -119,7 +118,7 @@ class Policy:
             code="default",
         )
 
-    def _check_budget(self, call: ToolCall, usage: Usage) -> Optional[Decision]:
+    def _check_budget(self, call: ToolCall, usage: Usage) -> Decision | None:
         if self.budget.max_calls is not None:
             if usage.tool_calls >= self.budget.max_calls:
                 return Decision(
@@ -162,7 +161,7 @@ def _decision(value: Any, field: str) -> DecisionKind:
         return DecisionKind(value)
     except (TypeError, ValueError) as exc:
         allowed = ", ".join(item.value for item in DecisionKind)
-        raise PolicyConfigError("{} must be one of: {}".format(field, allowed)) from exc
+        raise PolicyConfigError(f"{field} must be one of: {allowed}") from exc
 
 
 def _audit_mode(value: Any) -> ArgumentAuditMode:
@@ -170,9 +169,7 @@ def _audit_mode(value: Any) -> ArgumentAuditMode:
         return ArgumentAuditMode(value)
     except (TypeError, ValueError) as exc:
         allowed = ", ".join(item.value for item in ArgumentAuditMode)
-        raise PolicyConfigError(
-            "audit_arguments must be one of: {}".format(allowed)
-        ) from exc
+        raise PolicyConfigError(f"audit_arguments must be one of: {allowed}") from exc
 
 
 def _budget(raw: Any) -> Budget:
@@ -190,21 +187,21 @@ def _budget(raw: Any) -> Budget:
     )
 
 
-def _positive_int(value: Any, field: str) -> Optional[int]:
+def _positive_int(value: Any, field: str) -> int | None:
     if value is None:
         return None
     if isinstance(value, bool) or not isinstance(value, int) or value < 1:
-        raise PolicyConfigError("{} must be a positive integer".format(field))
-    return value
+        raise PolicyConfigError(f"{field} must be a positive integer")
+    return int(value)
 
 
-def _optional_money(value: Any, field: str) -> Optional[Decimal]:
+def _optional_money(value: Any, field: str) -> Decimal | None:
     if value is None:
         return None
     try:
         return money(value)
     except ValueError as exc:
-        raise PolicyConfigError("{}: {}".format(field, exc)) from exc
+        raise PolicyConfigError(f"{field}: {exc}") from exc
 
 
 def _arguments_match(
