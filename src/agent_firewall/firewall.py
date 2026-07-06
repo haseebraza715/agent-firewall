@@ -224,4 +224,3 @@ def _call_arguments(args: Any, kwargs: Any) -> Mapping[str, Any]:
     if args:
         arguments["_args"] = list(args)
     return arguments
-

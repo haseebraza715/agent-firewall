@@ -121,4 +121,3 @@ def _run_scenario(policy: Policy, scenario: Any) -> Dict[str, Any]:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

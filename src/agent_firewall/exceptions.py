@@ -16,4 +16,3 @@ class ToolCallBlocked(FirewallError):
 
 class ApprovalRequired(FirewallError):
     pass
-

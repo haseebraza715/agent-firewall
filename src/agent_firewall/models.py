@@ -81,4 +81,3 @@ class Usage:
             estimated_cost_usd=self.estimated_cost_usd,
             calls_by_tool=dict(self.calls_by_tool),
         )
-

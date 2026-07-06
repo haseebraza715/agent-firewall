@@ -33,4 +33,3 @@ Issues = "https://github.com/haseebraza715/agent-firewall/issues"
 
 [tool.setuptools.packages.find]
 where = ["src"]
-

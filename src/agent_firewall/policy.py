@@ -166,4 +166,3 @@ def _optional_money(value: Any, field: str) -> Optional[Decimal]:
         return money(value)
     except ValueError as exc:
         raise PolicyConfigError("{}: {}".format(field, exc)) from exc
-
