@@ -32,6 +32,88 @@ class PolicyTests(unittest.TestCase):
         self.assertEqual(decision.kind, DecisionKind.BLOCK)
         self.assertEqual(decision.code, "default")
 
+    def test_string_argument_patterns_use_glob_matching(self):
+        policy = Policy.from_dict(
+            {
+                "default_decision": "block",
+                "rules": [
+                    {
+                        "tool": "email.send",
+                        "arguments": {"to": "*@mycompany.com"},
+                        "decision": "allow",
+                    }
+                ],
+            }
+        )
+
+        internal = policy.evaluate(
+            ToolCall.create("email.send", {"to": "person@mycompany.com"}),
+            Usage(),
+        )
+        external = policy.evaluate(
+            ToolCall.create("email.send", {"to": "person@example.com"}),
+            Usage(),
+        )
+
+        self.assertEqual(internal.kind, DecisionKind.ALLOW)
+        self.assertEqual(external.kind, DecisionKind.BLOCK)
+
+    def test_non_string_argument_patterns_use_exact_matching(self):
+        policy = Policy.from_dict(
+            {
+                "rules": [
+                    {
+                        "tool": "payment.charge",
+                        "arguments": {"cents": 500, "live": False},
+                        "decision": "allow",
+                    }
+                ]
+            }
+        )
+
+        exact = policy.evaluate(
+            ToolCall.create("payment.charge", {"cents": 500, "live": False}),
+            Usage(),
+        )
+        changed = policy.evaluate(
+            ToolCall.create("payment.charge", {"cents": 501, "live": False}),
+            Usage(),
+        )
+
+        self.assertEqual(exact.kind, DecisionKind.ALLOW)
+        self.assertEqual(changed.kind, DecisionKind.BLOCK)
+
+    def test_missing_rule_argument_does_not_match(self):
+        policy = Policy.from_dict(
+            {
+                "rules": [
+                    {
+                        "tool": "email.send",
+                        "arguments": {"to": "*@mycompany.com"},
+                        "decision": "allow",
+                    }
+                ]
+            }
+        )
+
+        decision = policy.evaluate(ToolCall.create("email.send"), Usage())
+
+        self.assertEqual(decision.kind, DecisionKind.BLOCK)
+
+    def test_invalid_rule_arguments_are_rejected(self):
+        with self.assertRaisesRegex(PolicyConfigError, "arguments must be an object"):
+            Policy.from_dict(
+                {
+                    "rules": [
+                        {
+                            "tool": "email.send",
+                            "arguments": "not-an-object",
+                            "decision": "allow",
+                        }
+                    ]
+                }
+            )
+
     def test_total_call_budget_blocks_next_call(self):
         policy = Policy.from_dict(
             {"default_decision": "allow", "budget": {"max_calls": 1}}

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal
 from fnmatch import fnmatchcase
 from pathlib import Path
@@ -26,6 +26,7 @@ class Rule:
     tool: str
     decision: DecisionKind
     reason: str
+    arguments: Mapping[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -71,6 +72,11 @@ class Policy:
                 raise PolicyConfigError(
                     "rules[{}].reason must be a non-empty string".format(index)
                 )
+            arguments = item.get("arguments", {})
+            if not isinstance(arguments, dict):
+                raise PolicyConfigError(
+                    "rules[{}].arguments must be an object".format(index)
+                )
             rules.append(
                 Rule(
                     tool=tool,
@@ -78,6 +84,7 @@ class Policy:
                         item.get("decision"), "rules[{}].decision".format(index)
                     ),
                     reason=reason,
+                    arguments=dict(arguments),
                 )
             )
         return cls(default_decision=default, budget=budget, rules=rules)
@@ -88,7 +95,9 @@ class Policy:
             return budget_decision
 
         for index, rule in enumerate(self.rules):
-            if fnmatchcase(call.name, rule.tool):
+            if fnmatchcase(call.name, rule.tool) and _arguments_match(
+                call.arguments, rule.arguments
+            ):
                 return Decision(
                     kind=rule.decision,
                     reason=rule.reason,
@@ -166,3 +175,19 @@ def _optional_money(value: Any, field: str) -> Optional[Decimal]:
         return money(value)
     except ValueError as exc:
         raise PolicyConfigError("{}: {}".format(field, exc)) from exc
+
+
+def _arguments_match(
+    actual: Mapping[str, Any],
+    expected: Mapping[str, Any],
+) -> bool:
+    for key, pattern in expected.items():
+        if key not in actual:
+            return False
+        value = actual[key]
+        if isinstance(pattern, str):
+            if not isinstance(value, str) or not fnmatchcase(value, pattern):
+                return False
+        elif value != pattern:
+            return False
+    return True

@@ -13,6 +13,14 @@
     },
     {
       "tool": "email.*",
+      "arguments": {
+        "to": "*@mycompany.com"
+      },
+      "decision": "allow",
+      "reason": "company email recipients are pre-approved"
+    },
+    {
+      "tool": "email.*",
       "decision": "require_approval",
       "reason": "outbound email requires a human decision"
     },
