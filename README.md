@@ -25,7 +25,7 @@ dependencies and supports Python 3.9+.
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install -e .
+python -m pip install .
 ```
 
 Evaluate a proposed tool call without executing it:
