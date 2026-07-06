@@ -15,7 +15,7 @@ from .models import ArgumentAuditMode, Decision, DecisionKind, ToolCall, Usage
 from .policy import Budget, Policy, PolicyConfigError, Rule
 from .state import MemoryStateStore, SQLiteStateStore, StateStore
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = [
     "ApprovalConflict",
