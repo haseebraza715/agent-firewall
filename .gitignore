@@ -11,3 +11,4 @@ firewall-audit.jsonl
 firewall.db
 firewall.db-shm
 firewall.db-wal
+* 2.*

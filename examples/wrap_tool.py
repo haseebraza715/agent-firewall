@@ -4,12 +4,12 @@ from agent_firewall import Firewall
 
 
 def approve(call, decision):
-    answer = input("{}: {}. Approve? [y/N] ".format(call.name, decision.reason))
+    answer = input(f"{call.name}: {decision.reason}. Approve? [y/N] ")
     return answer.strip().lower() == "y"
 
 
 def send_email(to, subject):
-    print("sent {!r} to {}".format(subject, to))
+    print(f"sent {subject!r} to {to}")
 
 
 firewall = Firewall.from_policy_file(

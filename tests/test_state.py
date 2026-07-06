@@ -50,8 +50,7 @@ class SQLiteStateStoreTests(unittest.TestCase):
                 {"default_decision": "allow", "budget": {"max_calls": 1}}
             )
             firewalls = [
-                Firewall(policy, state_store=SQLiteStateStore(path))
-                for _ in range(8)
+                Firewall(policy, state_store=SQLiteStateStore(path)) for _ in range(8)
             ]
 
             def attempt(firewall):

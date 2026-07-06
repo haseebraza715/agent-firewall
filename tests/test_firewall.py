@@ -81,9 +81,7 @@ class FirewallTests(unittest.TestCase):
 
     def test_check_does_not_consume_budget(self):
         firewall = Firewall(
-            Policy.from_dict(
-                {"default_decision": "allow", "budget": {"max_calls": 1}}
-            )
+            Policy.from_dict({"default_decision": "allow", "budget": {"max_calls": 1}})
         )
 
         firewall.check("demo.tool")
@@ -167,9 +165,7 @@ class FirewallTests(unittest.TestCase):
 
     def test_failed_call_still_consumes_reserved_budget(self):
         firewall = Firewall(
-            Policy.from_dict(
-                {"default_decision": "allow", "budget": {"max_calls": 1}}
-            )
+            Policy.from_dict({"default_decision": "allow", "budget": {"max_calls": 1}})
         )
 
         with self.assertRaisesRegex(RuntimeError, "tool failed"):
@@ -183,9 +179,7 @@ class FirewallTests(unittest.TestCase):
 
     def test_concurrent_calls_cannot_overspend_budget(self):
         firewall = Firewall(
-            Policy.from_dict(
-                {"default_decision": "allow", "budget": {"max_calls": 1}}
-            )
+            Policy.from_dict({"default_decision": "allow", "budget": {"max_calls": 1}})
         )
 
         def attempt():
