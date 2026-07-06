@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Sequence
 
+from .dashboard import Dashboard
 from .models import DecisionKind, ToolCall, Usage
 from .mcp_proxy import run_mcp_proxy
 from .policy import Policy, PolicyConfigError
@@ -41,12 +42,30 @@ def build_parser() -> argparse.ArgumentParser:
     mcp = commands.add_parser("mcp", help="guard a local MCP stdio server")
     mcp.add_argument("--policy", type=Path, required=True)
     mcp.add_argument("--audit", type=Path)
-    mcp.add_argument(
+    mcp.add_argument("--state", type=Path)
+    approval = mcp.add_mutually_exclusive_group()
+    approval.add_argument(
         "--approve-terminal",
         action="store_true",
         help="prompt on the controlling terminal for approval-gated calls",
     )
+    approval.add_argument(
+        "--approve-web",
+        action="store_true",
+        help="wait for decisions from the localhost dashboard",
+    )
+    mcp.add_argument("--approval-timeout", type=float, default=300)
     mcp.add_argument("server_command", nargs=argparse.REMAINDER)
+
+    dashboard = commands.add_parser(
+        "dashboard",
+        help="run the local audit and approval dashboard",
+    )
+    dashboard.add_argument("--policy", type=Path, required=True)
+    dashboard.add_argument("--audit", type=Path, required=True)
+    dashboard.add_argument("--state", type=Path, required=True)
+    dashboard.add_argument("--host", default="127.0.0.1")
+    dashboard.add_argument("--port", type=int, default=8787)
     return parser
 
 
@@ -55,13 +74,18 @@ def main(argv: Sequence[str] = None) -> int:
     try:
         if args.command == "check":
             return _check(args)
+        if args.command == "dashboard":
+            return _dashboard(args)
         if args.command == "mcp":
             return asyncio.run(
                 run_mcp_proxy(
                     args.policy,
                     args.server_command,
                     audit_path=args.audit,
+                    state_path=args.state,
                     approve_terminal=args.approve_terminal,
+                    approve_web=args.approve_web,
+                    approval_timeout=args.approval_timeout,
                 )
             )
         return _replay(args)
@@ -101,6 +125,23 @@ def _replay(args: argparse.Namespace) -> int:
     }
     print(json.dumps({"summary": summary}, sort_keys=True))
     return 1 if failures else 0
+
+
+def _dashboard(args: argparse.Namespace) -> int:
+    dashboard = Dashboard(
+        args.policy,
+        args.audit,
+        args.state,
+        host=args.host,
+        port=args.port,
+    )
+    try:
+        dashboard.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        dashboard.server.server_close()
+    return 0
 
 
 def _run_scenario(policy: Policy, scenario: Any) -> Dict[str, Any]:
