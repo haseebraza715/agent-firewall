@@ -1,0 +1,31 @@
+{
+  "default_decision": "block",
+  "budget": {
+    "max_calls": 10,
+    "max_calls_per_tool": 3,
+    "max_cost_usd": "0.50"
+  },
+  "rules": [
+    {
+      "tool": "database.query",
+      "decision": "allow",
+      "reason": "read-only database queries are allowed"
+    },
+    {
+      "tool": "email.*",
+      "decision": "require_approval",
+      "reason": "outbound email requires a human decision"
+    },
+    {
+      "tool": "quotation.create",
+      "decision": "require_approval",
+      "reason": "creating a customer quotation has external side effects"
+    },
+    {
+      "tool": "filesystem.read",
+      "decision": "allow",
+      "reason": "read-only file access is allowed"
+    }
+  ]
+}
+
