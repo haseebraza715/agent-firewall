@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Sequence
 
 from .models import DecisionKind, ToolCall, Usage
+from .mcp_proxy import run_mcp_proxy
 from .policy import Policy, PolicyConfigError
 
 EXIT_BY_DECISION = {
@@ -35,6 +37,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     replay.add_argument("--policy", type=Path, required=True)
     replay.add_argument("--scenarios", type=Path, required=True)
+
+    mcp = commands.add_parser("mcp", help="guard a local MCP stdio server")
+    mcp.add_argument("--policy", type=Path, required=True)
+    mcp.add_argument("--audit", type=Path)
+    mcp.add_argument(
+        "--approve-terminal",
+        action="store_true",
+        help="prompt on the controlling terminal for approval-gated calls",
+    )
+    mcp.add_argument("server_command", nargs=argparse.REMAINDER)
     return parser
 
 
@@ -43,6 +55,15 @@ def main(argv: Sequence[str] = None) -> int:
     try:
         if args.command == "check":
             return _check(args)
+        if args.command == "mcp":
+            return asyncio.run(
+                run_mcp_proxy(
+                    args.policy,
+                    args.server_command,
+                    audit_path=args.audit,
+                    approve_terminal=args.approve_terminal,
+                )
+            )
         return _replay(args)
     except (OSError, PolicyConfigError, ValueError, json.JSONDecodeError) as exc:
         print("error: {}".format(exc), file=sys.stderr)

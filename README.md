@@ -19,6 +19,7 @@ dependencies and supports Python 3.9+.
 - Thread-safe budget reservation
 - Argument-free JSONL audit logs
 - CLI checks and complaint-derived scenario replay
+- Transparent MCP stdio proxy with terminal approval
 
 ## Quick start
 
@@ -74,6 +75,40 @@ safe_send_email("customer@example.com", "Your receipt")
 
 Use `await firewall.acall(...)` or wrap an `async def` tool for asynchronous
 agents.
+
+## Guard any local MCP server
+
+No agent code changes are required. Put the firewall in front of the existing
+stdio server command:
+
+```bash
+agent-firewall mcp \
+  --policy examples/policy.json \
+  --audit firewall-audit.jsonl \
+  --approve-terminal \
+  -- python path/to/your_mcp_server.py
+```
+
+Use the same command and arguments in the MCP client configuration:
+
+```json
+{
+  "command": "agent-firewall",
+  "args": [
+    "mcp",
+    "--policy", "/absolute/path/policy.json",
+    "--audit", "/absolute/path/firewall-audit.jsonl",
+    "--approve-terminal",
+    "--",
+    "python", "/absolute/path/server.py"
+  ]
+}
+```
+
+The proxy forwards newline-delimited JSON-RPC unchanged except for
+`tools/call`. Blocked calls receive a JSON-RPC policy error. Approval rules
+prompt on the proxy's controlling terminal; without `--approve-terminal`, they
+fail closed.
 
 ## Policy format
 
@@ -159,9 +194,9 @@ PYTHONPATH=src python -m unittest discover -s tests -v
 
 ## MVP boundaries
 
-This release does not yet provide semantic prompt-injection detection, an MCP
-transport adapter, persistent distributed budgets, or a web approval UI.
-Those should be added only after testing the policy boundary with real users.
+This release does not yet provide semantic prompt-injection detection,
+persistent distributed budgets, or a web approval UI. Those should be added
+only after testing the policy boundary with real users.
 
 ## Security posture
 
