@@ -1,0 +1,48 @@
+[
+  {
+    "id": "langgraph-6731-query-loop",
+    "title": "Agent repeats database queries until recursion limit",
+    "source_url": "https://github.com/langchain-ai/langgraph/issues/6731",
+    "calls": [
+      {"tool": "database.query", "estimated_cost_usd": "0.02"},
+      {"tool": "database.query", "estimated_cost_usd": "0.02"},
+      {"tool": "database.query", "estimated_cost_usd": "0.02"},
+      {"tool": "database.query", "estimated_cost_usd": "0.02"}
+    ],
+    "expected_decisions": ["allow", "allow", "allow", "block"]
+  },
+  {
+    "id": "langchain-16712-repeated-quotation",
+    "title": "Agent retriggers a side-effecting quotation tool",
+    "source_url": "https://github.com/langchain-ai/langchain/issues/16712",
+    "calls": [
+      {
+        "tool": "quotation.create",
+        "arguments": {"customer": "example"}
+      }
+    ],
+    "expected_decisions": ["require_approval"]
+  },
+  {
+    "id": "langgraph-6053-missing-approval",
+    "title": "Human-in-the-loop approval is bypassed",
+    "source_url": "https://github.com/langchain-ai/langgraph/issues/6053",
+    "calls": [
+      {
+        "tool": "email.send",
+        "arguments": {"to": "customer@example.com"}
+      }
+    ],
+    "expected_decisions": ["require_approval"]
+  },
+  {
+    "id": "projected-cost-cap",
+    "title": "A proposed call would cross the configured spend cap",
+    "source_url": null,
+    "calls": [
+      {"tool": "database.query", "estimated_cost_usd": "0.30"},
+      {"tool": "database.query", "estimated_cost_usd": "0.25"}
+    ],
+    "expected_decisions": ["allow", "block"]
+  }
+]
