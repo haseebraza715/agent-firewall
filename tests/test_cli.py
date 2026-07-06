@@ -3,7 +3,8 @@ import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
 
-from agent_firewall.cli import build_parser, main
+from agent_firewall import Policy
+from agent_firewall.cli import _run_scenario, build_parser, main
 
 ROOT = Path(__file__).resolve().parents[1]
 POLICY = ROOT / "examples" / "policy.json"
@@ -107,6 +108,19 @@ class CliTests(unittest.TestCase):
 
         self.assertEqual(args.host, "127.0.0.1")
         self.assertEqual(args.port, 8787)
+
+    def test_scenario_errors_include_call_location(self):
+        scenario = {
+            "id": "bad-case",
+            "calls": [{"tool": ""}],
+            "expected_decisions": ["block"],
+        }
+
+        with self.assertRaisesRegex(
+            ValueError,
+            r"bad-case: calls\[0\]: tool name must be a non-empty string",
+        ):
+            _run_scenario(Policy.from_dict({}), scenario)
 
 
 if __name__ == "__main__":

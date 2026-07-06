@@ -4,12 +4,13 @@ import argparse
 import asyncio
 import json
 import sys
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Dict, List, Sequence
+from typing import Any
 
 from .dashboard import Dashboard
-from .models import DecisionKind, ToolCall, Usage
 from .mcp_proxy import run_mcp_proxy
+from .models import DecisionKind, ToolCall, Usage
 from .policy import Policy, PolicyConfigError
 
 EXIT_BY_DECISION = {
@@ -69,7 +70,7 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: Sequence[str] = None) -> int:
+def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         if args.command == "check":
@@ -90,7 +91,7 @@ def main(argv: Sequence[str] = None) -> int:
             )
         return _replay(args)
     except (OSError, PolicyConfigError, ValueError, json.JSONDecodeError) as exc:
-        print("error: {}".format(exc), file=sys.stderr)
+        print(f"error: {exc}", file=sys.stderr)
         return 2
 
 
@@ -144,7 +145,7 @@ def _dashboard(args: argparse.Namespace) -> int:
     return 0
 
 
-def _run_scenario(policy: Policy, scenario: Any) -> Dict[str, Any]:
+def _run_scenario(policy: Policy, scenario: Any) -> dict[str, Any]:
     if not isinstance(scenario, dict):
         raise ValueError("each scenario must be a JSON object")
     scenario_id = scenario.get("id")
@@ -153,20 +154,23 @@ def _run_scenario(policy: Policy, scenario: Any) -> Dict[str, Any]:
     if not isinstance(scenario_id, str) or not scenario_id:
         raise ValueError("scenario id must be a non-empty string")
     if not isinstance(calls, list) or not isinstance(expected, list):
-        raise ValueError("{}: calls and expected_decisions must be lists".format(scenario_id))
+        raise ValueError(f"{scenario_id}: calls and expected_decisions must be lists")
     if len(calls) != len(expected):
-        raise ValueError("{}: each call needs an expected decision".format(scenario_id))
+        raise ValueError(f"{scenario_id}: each call needs an expected decision")
 
     usage = Usage()
-    actual: List[str] = []
+    actual: list[str] = []
     for index, raw_call in enumerate(calls):
         if not isinstance(raw_call, dict):
-            raise ValueError("{}: calls[{}] must be an object".format(scenario_id, index))
-        call = ToolCall.create(
-            raw_call.get("tool"),
-            raw_call.get("arguments"),
-            raw_call.get("estimated_cost_usd", 0),
-        )
+            raise ValueError(f"{scenario_id}: calls[{index}] must be an object")
+        try:
+            call = ToolCall.create(
+                raw_call.get("tool"),
+                raw_call.get("arguments"),
+                raw_call.get("estimated_cost_usd", 0),
+            )
+        except ValueError as exc:
+            raise ValueError(f"{scenario_id}: calls[{index}]: {exc}") from exc
         decision = policy.evaluate(call, usage)
         actual.append(decision.kind.value)
         if decision.kind is DecisionKind.ALLOW:
