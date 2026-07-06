@@ -3,8 +3,11 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
+
+from agent_firewall import SQLiteApprovalQueue
 
 ROOT = Path(__file__).resolve().parents[1]
 FAKE_SERVER = ROOT / "tests" / "fixtures" / "fake_mcp_server.py"
@@ -144,6 +147,77 @@ class McpProxyTests(unittest.TestCase):
             responses[0]["error"]["data"]["decision"],
             "require_approval",
         )
+
+    def test_web_approval_unblocks_waiting_tool_call(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            policy_path = root / "policy.json"
+            state_path = root / "firewall.db"
+            policy_path.write_text(
+                json.dumps(
+                    {
+                        "rules": [
+                            {
+                                "tool": "email.send",
+                                "decision": "require_approval",
+                                "reason": "external email",
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            env = dict(os.environ)
+            env["PYTHONPATH"] = str(ROOT / "src")
+            process = subprocess.Popen(
+                [
+                    sys.executable,
+                    "-m",
+                    "agent_firewall",
+                    "mcp",
+                    "--policy",
+                    str(policy_path),
+                    "--state",
+                    str(state_path),
+                    "--approve-web",
+                    "--approval-timeout",
+                    "2",
+                    "--",
+                    sys.executable,
+                    str(FAKE_SERVER),
+                ],
+                cwd=ROOT,
+                env=env,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            request = {
+                "jsonrpc": "2.0",
+                "id": 9,
+                "method": "tools/call",
+                "params": {"name": "email.send", "arguments": {"to": "person@example.com"}},
+            }
+            process.stdin.write(json.dumps(request) + "\n")
+            process.stdin.flush()
+            queue = SQLiteApprovalQueue(state_path)
+            deadline = time.monotonic() + 2
+            while time.monotonic() < deadline and not queue.pending():
+                time.sleep(0.01)
+            self.assertTrue(queue.pending())
+            queue.decide(queue.pending()[0].call_id, "approved")
+            process.stdin.close()
+            stdout = process.stdout.read()
+            stderr = process.stderr.read()
+            status = process.wait(timeout=5)
+            process.stdout.close()
+            process.stderr.close()
+
+        self.assertEqual(status, 0, stderr)
+        response = json.loads(stdout)
+        self.assertEqual(response["id"], 9)
+        self.assertIn("result", response)
 
 
 if __name__ == "__main__":
