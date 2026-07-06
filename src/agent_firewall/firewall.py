@@ -3,13 +3,13 @@ from __future__ import annotations
 import inspect
 from functools import wraps
 from pathlib import Path
-from threading import Lock
 from typing import Any, Awaitable, Callable, Mapping, Optional, Union
 
 from .audit import JsonlAuditLog
 from .exceptions import ApprovalRequired, ToolCallBlocked
 from .models import Decision, DecisionKind, ToolCall, Usage
 from .policy import Policy
+from .state import MemoryStateStore, SQLiteStateStore, StateStore
 
 ApproverResult = Union[bool, Awaitable[bool]]
 Approver = Callable[[ToolCall, Decision], ApproverResult]
@@ -21,12 +21,12 @@ class Firewall:
         policy: Policy,
         approver: Optional[Approver] = None,
         audit_log: Optional[JsonlAuditLog] = None,
+        state_store: Optional[StateStore] = None,
     ) -> None:
         self.policy = policy
         self.approver = approver
         self.audit_log = audit_log
-        self._usage = Usage()
-        self._lock = Lock()
+        self.state_store = state_store or MemoryStateStore()
 
     @classmethod
     def from_policy_file(
@@ -34,14 +34,20 @@ class Firewall:
         policy_path: Path,
         approver: Optional[Approver] = None,
         audit_path: Optional[Path] = None,
+        state_path: Optional[Path] = None,
     ) -> "Firewall":
         audit_log = JsonlAuditLog(audit_path) if audit_path else None
-        return cls(Policy.load(policy_path), approver=approver, audit_log=audit_log)
+        state_store = SQLiteStateStore(state_path) if state_path else None
+        return cls(
+            Policy.load(policy_path),
+            approver=approver,
+            audit_log=audit_log,
+            state_store=state_store,
+        )
 
     @property
     def usage(self) -> Usage:
-        with self._lock:
-            return self._usage.copy()
+        return self.state_store.usage()
 
     def check(
         self,
@@ -50,8 +56,7 @@ class Firewall:
         estimated_cost_usd: Any = 0,
     ) -> Decision:
         call = ToolCall.create(tool_name, arguments, estimated_cost_usd)
-        with self._lock:
-            return self.policy.evaluate(call, self._usage)
+        return self.policy.evaluate(call, self.usage)
 
     def call(
         self,
@@ -138,11 +143,9 @@ class Firewall:
         return guarded
 
     def _authorize(self, call: ToolCall) -> Decision:
-        with self._lock:
-            decision = self.policy.evaluate(call, self._usage)
-            if decision.kind is DecisionKind.ALLOW:
-                self._usage.record(call)
-            usage = self._usage.copy()
+        result = self.state_store.evaluate_and_reserve(self.policy, call)
+        decision = result.decision
+        usage = result.usage
 
         if decision.kind is DecisionKind.BLOCK:
             self._audit("blocked", call, decision, usage=usage)
@@ -188,13 +191,13 @@ class Firewall:
             self._audit("approval_denied", call, denied)
             raise ToolCallBlocked(denied.reason, call, denied)
 
-        with self._lock:
-            current = self.policy.evaluate(call, self._usage)
-            if current.kind is DecisionKind.BLOCK:
-                usage = self._usage.copy()
-            else:
-                self._usage.record(call)
-                usage = self._usage.copy()
+        result = self.state_store.evaluate_and_reserve(
+            self.policy,
+            call,
+            approved=True,
+        )
+        current = result.decision
+        usage = result.usage
 
         if current.kind is DecisionKind.BLOCK:
             self._audit("blocked", call, current, usage=usage)
