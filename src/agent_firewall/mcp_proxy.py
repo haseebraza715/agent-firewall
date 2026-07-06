@@ -68,7 +68,10 @@ class McpStdioProxy:
         finally:
             if self.process.stdin is not None:
                 self.process.stdin.close()
-                await self.process.stdin.wait_closed()
+                try:
+                    await self.process.stdin.wait_closed()
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
             await child_reader
         return await self.process.wait()
 
