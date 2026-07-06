@@ -34,7 +34,9 @@ def receive(process: subprocess.Popen[bytes], request_id: int) -> dict[str, Any]
         line = process.stdout.readline()
         if not line:
             raise RuntimeError("MCP proxy exited before responding")
-        message = json.loads(line)
+        message: Any = json.loads(line)
+        if not isinstance(message, dict):
+            raise RuntimeError("MCP proxy returned a non-object response")
         if message.get("id") == request_id:
             return message
 
