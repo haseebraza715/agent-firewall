@@ -3,6 +3,7 @@
   "budget": {
     "max_calls": 10,
     "max_calls_per_tool": 3,
+    "max_identical_calls": 2,
     "max_cost_usd": "0.50"
   },
   "rules": [

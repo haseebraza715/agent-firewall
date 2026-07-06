@@ -139,6 +139,31 @@ class PolicyTests(unittest.TestCase):
         self.assertEqual(blocked.code, "max_calls_per_tool")
         self.assertEqual(allowed.kind, DecisionKind.ALLOW)
 
+    def test_identical_call_budget_includes_canonical_arguments(self):
+        policy = Policy.from_dict(
+            {"default_decision": "allow", "budget": {"max_identical_calls": 1}}
+        )
+        usage = Usage()
+        usage.record(ToolCall.create("search", {"query": "firewall", "limit": 5}))
+
+        repeated = policy.evaluate(
+            ToolCall.create("search", {"limit": 5, "query": "firewall"}),
+            usage,
+        )
+        changed = policy.evaluate(
+            ToolCall.create("search", {"query": "firewall", "limit": 10}),
+            usage,
+        )
+
+        self.assertEqual(repeated.code, "max_identical_calls")
+        self.assertEqual(changed.kind, DecisionKind.ALLOW)
+
+    def test_fingerprint_includes_tool_name(self):
+        first = ToolCall.create("search.web", {"query": "same"})
+        second = ToolCall.create("search.files", {"query": "same"})
+
+        self.assertNotEqual(first.fingerprint, second.fingerprint)
+
     def test_cost_budget_uses_projected_cost(self):
         policy = Policy.from_dict(
             {"default_decision": "allow", "budget": {"max_cost_usd": "0.50"}}

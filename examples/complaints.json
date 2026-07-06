@@ -6,10 +6,9 @@
     "calls": [
       {"tool": "database.query", "estimated_cost_usd": "0.02"},
       {"tool": "database.query", "estimated_cost_usd": "0.02"},
-      {"tool": "database.query", "estimated_cost_usd": "0.02"},
       {"tool": "database.query", "estimated_cost_usd": "0.02"}
     ],
-    "expected_decisions": ["allow", "allow", "allow", "block"]
+    "expected_decisions": ["allow", "allow", "block"]
   },
   {
     "id": "langchain-16712-repeated-quotation",

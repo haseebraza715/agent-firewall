@@ -18,6 +18,7 @@ class PolicyConfigError(ValueError):
 class Budget:
     max_calls: Optional[int] = None
     max_calls_per_tool: Optional[int] = None
+    max_identical_calls: Optional[int] = None
     max_cost_usd: Optional[Decimal] = None
 
 
@@ -129,6 +130,15 @@ class Policy:
                     "max_calls_per_tool",
                 )
 
+        if self.budget.max_identical_calls is not None:
+            prior_calls = usage.calls_by_fingerprint.get(call.fingerprint, 0)
+            if prior_calls >= self.budget.max_identical_calls:
+                return Decision(
+                    DecisionKind.BLOCK,
+                    "identical tool-call budget exhausted",
+                    "max_identical_calls",
+                )
+
         if self.budget.max_cost_usd is not None:
             projected = usage.estimated_cost_usd + call.estimated_cost_usd
             if projected > self.budget.max_cost_usd:
@@ -155,6 +165,9 @@ def _budget(raw: Any) -> Budget:
         max_calls=_positive_int(raw.get("max_calls"), "budget.max_calls"),
         max_calls_per_tool=_positive_int(
             raw.get("max_calls_per_tool"), "budget.max_calls_per_tool"
+        ),
+        max_identical_calls=_positive_int(
+            raw.get("max_identical_calls"), "budget.max_identical_calls"
         ),
         max_cost_usd=_optional_money(raw.get("max_cost_usd"), "budget.max_cost_usd"),
     )

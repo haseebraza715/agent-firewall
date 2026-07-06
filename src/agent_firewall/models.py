@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 from enum import Enum
@@ -45,6 +47,17 @@ class ToolCall:
             estimated_cost_usd=money(estimated_cost_usd),
         )
 
+    @property
+    def fingerprint(self) -> str:
+        payload = json.dumps(
+            {"tool": self.name, "arguments": self.arguments},
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            default=repr,
+        )
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
 
 @dataclass(frozen=True)
 class Decision:
@@ -69,15 +82,21 @@ class Usage:
     tool_calls: int = 0
     estimated_cost_usd: Decimal = Decimal("0")
     calls_by_tool: Dict[str, int] = field(default_factory=dict)
+    calls_by_fingerprint: Dict[str, int] = field(default_factory=dict)
 
     def record(self, call: ToolCall) -> None:
         self.tool_calls += 1
         self.estimated_cost_usd += call.estimated_cost_usd
         self.calls_by_tool[call.name] = self.calls_by_tool.get(call.name, 0) + 1
+        fingerprint = call.fingerprint
+        self.calls_by_fingerprint[fingerprint] = (
+            self.calls_by_fingerprint.get(fingerprint, 0) + 1
+        )
 
     def copy(self) -> "Usage":
         return Usage(
             tool_calls=self.tool_calls,
             estimated_cost_usd=self.estimated_cost_usd,
             calls_by_tool=dict(self.calls_by_tool),
+            calls_by_fingerprint=dict(self.calls_by_fingerprint),
         )
