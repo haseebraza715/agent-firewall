@@ -15,3 +15,11 @@ Run it from the repository root:
 
 `npx` downloads `@modelcontextprotocol/server-filesystem` on the first run.
 The demo uses a temporary audit log and does not change the fixture file.
+
+Re-record the GIF with the same Node and VHS environment:
+
+```bash
+docker build -f examples/demo/Dockerfile.vhs -t agent-firewall-vhs .
+docker run --rm -v "$PWD:/work" agent-firewall-vhs \
+  docs/media/agent-firewall-demo.tape
+```
