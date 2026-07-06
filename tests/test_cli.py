@@ -73,7 +73,7 @@ class CliTests(unittest.TestCase):
 
         self.assertEqual(status, 0)
         self.assertIn('"failed": 0', output.getvalue())
-        self.assertIn('"total": 4', output.getvalue())
+        self.assertIn('"total": 11', output.getvalue())
 
     def test_mcp_parser_accepts_web_approval_state(self):
         args = build_parser().parse_args(
