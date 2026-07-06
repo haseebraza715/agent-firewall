@@ -8,3 +8,6 @@ __pycache__/
 build/
 dist/
 firewall-audit.jsonl
+firewall.db
+firewall.db-shm
+firewall.db-wal

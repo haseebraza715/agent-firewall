@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence
 
+from .approvals import SQLiteApprovalQueue
 from .exceptions import FirewallError
 from .firewall import Firewall
 from .models import Decision, ToolCall
@@ -195,13 +196,29 @@ async def run_mcp_proxy(
     policy_path: Path,
     command: Sequence[str],
     audit_path: Optional[Path] = None,
+    state_path: Optional[Path] = None,
     approve_terminal: bool = False,
+    approve_web: bool = False,
+    approval_timeout: float = 300,
 ) -> int:
-    approver = TerminalApprover() if approve_terminal else None
+    if approve_terminal and approve_web:
+        raise ValueError("choose either terminal or web approval")
+    if approve_web and state_path is None:
+        raise ValueError("--approve-web requires --state")
+    if approve_web:
+        approver = SQLiteApprovalQueue(
+            state_path,
+            timeout_seconds=approval_timeout,
+        )
+    elif approve_terminal:
+        approver = TerminalApprover()
+    else:
+        approver = None
     firewall = Firewall.from_policy_file(
         policy_path,
         approver=approver,
         audit_path=audit_path,
+        state_path=state_path,
     )
     return await McpStdioProxy(firewall, command).run()
 

@@ -20,6 +20,8 @@ dependencies and supports Python 3.9+.
 - Argument-free JSONL audit logs
 - CLI checks and complaint-derived scenario replay
 - Transparent MCP stdio proxy with terminal approval
+- Persistent local budgets and approvals in SQLite
+- Loopback-only dashboard with web approval
 
 ## Quick start
 
@@ -110,6 +112,31 @@ The proxy forwards newline-delimited JSON-RPC unchanged except for
 prompt on the proxy's controlling terminal; without `--approve-terminal`, they
 fail closed.
 
+For persistent budgets and browser approval, start the dashboard:
+
+```bash
+agent-firewall dashboard \
+  --policy examples/policy.json \
+  --audit firewall-audit.jsonl \
+  --state firewall.db
+```
+
+Then run the proxy with the same state and audit files:
+
+```bash
+agent-firewall mcp \
+  --policy examples/policy.json \
+  --audit firewall-audit.jsonl \
+  --state firewall.db \
+  --approve-web \
+  -- python path/to/your_mcp_server.py
+```
+
+Open the loopback URL printed by the dashboard. Calls awaiting approval appear
+without their arguments; approve or deny them in the browser. Decisions are
+idempotent, and an approval rechecks the budget before execution. SQLite keeps
+call, cost, per-tool, and identical-call counts across process restarts.
+
 ## Policy format
 
 Policies are JSON and fail closed by default:
@@ -194,9 +221,9 @@ PYTHONPATH=src python -m unittest discover -s tests -v
 
 ## MVP boundaries
 
-This release does not yet provide semantic prompt-injection detection,
-persistent distributed budgets, or a web approval UI. Those should be added
-only after testing the policy boundary with real users.
+This release does not provide semantic prompt-injection detection or
+multi-host distributed budgets. Both need a threat model and real usage data
+before they can be implemented honestly.
 
 ## Security posture
 
