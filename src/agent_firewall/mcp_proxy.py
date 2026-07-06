@@ -4,15 +4,17 @@ import asyncio
 import json
 import os
 import sys
+from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Sequence
+from typing import Any, cast
 
 from .approvals import SQLiteApprovalQueue
 from .exceptions import FirewallError
-from .firewall import Firewall
+from .firewall import Approver, Firewall
 from .models import Decision, ToolCall
 
 POLICY_ERROR = -32001
+DUPLICATE_ID_ERROR = -32600
 
 
 class TerminalApprover:
@@ -24,9 +26,7 @@ class TerminalApprover:
         path = "CON" if os.name == "nt" else "/dev/tty"
         try:
             with open(path, "r+", encoding="utf-8") as terminal:
-                terminal.write(
-                    "{}: {}. Approve? [y/N] ".format(call.name, decision.reason)
-                )
+                terminal.write(f"{call.name}: {decision.reason}. Approve? [y/N] ")
                 terminal.flush()
                 return terminal.readline().strip().lower() == "y"
         except OSError:
@@ -45,8 +45,8 @@ class McpStdioProxy:
             raise ValueError("MCP server command is required after --")
         self.firewall = firewall
         self.command = list(command)
-        self.process: Optional[asyncio.subprocess.Process] = None
-        self.pending: Dict[str, asyncio.Future] = {}
+        self.process: asyncio.subprocess.Process | None = None
+        self.pending: dict[str, asyncio.Future[Mapping[str, Any]]] = {}
         self.write_lock = asyncio.Lock()
 
     async def run(self) -> int:
@@ -56,7 +56,7 @@ class McpStdioProxy:
             stdout=asyncio.subprocess.PIPE,
         )
         child_reader = asyncio.create_task(self._read_child())
-        requests: List[asyncio.Task] = []
+        requests: list[asyncio.Task[None]] = []
         try:
             while True:
                 line = await asyncio.to_thread(sys.stdin.buffer.readline)
@@ -96,17 +96,17 @@ class McpStdioProxy:
             await self._passthrough_client_message(message, line)
             return
 
-        async def forward(**_: Any) -> Optional[Mapping[str, Any]]:
+        async def forward() -> Mapping[str, Any] | None:
             if "id" not in message:
                 await self._write_child(line)
                 return None
             return await self._forward_request(message)
 
         try:
-            response = await self.firewall.acall(
+            response = await self.firewall.acall_with_arguments(
                 tool_name,
+                arguments,
                 forward,
-                **arguments
             )
         except FirewallError as exc:
             if "id" in message:
@@ -143,8 +143,17 @@ class McpStdioProxy:
     ) -> Mapping[str, Any]:
         key = _request_key(message["id"])
         if key in self.pending:
-            raise ValueError("duplicate in-flight JSON-RPC id")
-        future = asyncio.get_running_loop().create_future()
+            return {
+                "jsonrpc": "2.0",
+                "id": message["id"],
+                "error": {
+                    "code": DUPLICATE_ID_ERROR,
+                    "message": "Duplicate in-flight JSON-RPC id",
+                },
+            }
+        future: asyncio.Future[Mapping[str, Any]] = (
+            asyncio.get_running_loop().create_future()
+        )
         self.pending[key] = future
         try:
             await self._write_child(_encode(message))
@@ -195,8 +204,8 @@ class McpStdioProxy:
 async def run_mcp_proxy(
     policy_path: Path,
     command: Sequence[str],
-    audit_path: Optional[Path] = None,
-    state_path: Optional[Path] = None,
+    audit_path: Path | None = None,
+    state_path: Path | None = None,
     approve_terminal: bool = False,
     approve_web: bool = False,
     approval_timeout: float = 300,
@@ -205,7 +214,9 @@ async def run_mcp_proxy(
         raise ValueError("choose either terminal or web approval")
     if approve_web and state_path is None:
         raise ValueError("--approve-web requires --state")
+    approver: Approver | None
     if approve_web:
+        assert state_path is not None
         approver = SQLiteApprovalQueue(
             state_path,
             timeout_seconds=approval_timeout,
@@ -227,12 +238,12 @@ def _request_key(request_id: Any) -> str:
     return json.dumps(request_id, sort_keys=True, separators=(",", ":"))
 
 
-def _decode(line: bytes) -> Optional[Mapping[str, Any]]:
+def _decode(line: bytes) -> Mapping[str, Any] | None:
     try:
         message = json.loads(line)
     except (UnicodeDecodeError, json.JSONDecodeError):
         return None
-    return message if isinstance(message, dict) else None
+    return cast(Mapping[str, Any], message) if isinstance(message, dict) else None
 
 
 def _encode(message: Mapping[str, Any]) -> bytes:

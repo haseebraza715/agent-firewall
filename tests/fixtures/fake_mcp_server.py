@@ -1,6 +1,6 @@
 import json
 import sys
-
+import time
 
 for line in sys.stdin:
     message = json.loads(line)
@@ -25,6 +25,9 @@ for line in sys.stdin:
             ]
         }
     elif method == "tools/call":
+        delay = message["params"].get("arguments", {}).get("delay_seconds", 0)
+        if delay:
+            time.sleep(delay)
         result = {
             "content": [
                 {
