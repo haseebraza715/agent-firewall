@@ -4,7 +4,7 @@
   "budget": {
     "max_calls": 10,
     "max_calls_per_tool": 3,
-    "max_identical_calls": 2,
+    "max_identical_calls": 1,
     "max_cost_usd": "0.50"
   },
   "rules": [
@@ -37,6 +37,11 @@
       "reason": "read-only file access is allowed"
     },
     {
+      "tool": "read_text_file",
+      "decision": "allow",
+      "reason": "reference MCP server reads are allowed"
+    },
+    {
       "tool": "search.web",
       "decision": "allow",
       "reason": "web search is allowed within runtime budgets"
@@ -55,6 +60,11 @@
       "tool": "agent.delegate",
       "decision": "allow",
       "reason": "delegation is constrained by repetition budgets"
+    },
+    {
+      "tool": "human.input",
+      "decision": "allow",
+      "reason": "repeated human-input requests are constrained by repetition budgets"
     },
     {
       "tool": "filesystem.delete",

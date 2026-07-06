@@ -5,10 +5,9 @@
     "source_url": "https://github.com/langchain-ai/langgraph/issues/6731",
     "calls": [
       {"tool": "database.query", "estimated_cost_usd": "0.02"},
-      {"tool": "database.query", "estimated_cost_usd": "0.02"},
       {"tool": "database.query", "estimated_cost_usd": "0.02"}
     ],
-    "expected_decisions": ["allow", "allow", "block"]
+    "expected_decisions": ["allow", "block"]
   },
   {
     "id": "langchain-16712-repeated-quotation",
@@ -35,12 +34,12 @@
     "expected_decisions": ["require_approval"]
   },
   {
-    "id": "projected-cost-cap",
-    "title": "A proposed call would cross the configured spend cap",
-    "source_url": null,
+    "id": "langgraph-4172-repeated-human-input",
+    "title": "Human-input node repeats on later invocations",
+    "source_url": "https://github.com/langchain-ai/langgraph/issues/4172",
     "calls": [
-      {"tool": "database.query", "estimated_cost_usd": "0.30"},
-      {"tool": "database.query", "estimated_cost_usd": "0.25"}
+      {"tool": "human.input", "arguments": {"question": "What is your age?"}},
+      {"tool": "human.input", "arguments": {"question": "What is your age?"}}
     ],
     "expected_decisions": ["allow", "block"]
   },
@@ -50,10 +49,9 @@
     "source_url": "https://github.com/langchain-ai/langgraph/discussions/1097",
     "calls": [
       {"tool": "search.web", "arguments": {"query": "weather Budapest"}},
-      {"tool": "search.web", "arguments": {"query": "weather Budapest"}},
       {"tool": "search.web", "arguments": {"query": "weather Budapest"}}
     ],
-    "expected_decisions": ["allow", "allow", "block"]
+    "expected_decisions": ["allow", "block"]
   },
   {
     "id": "opencode-3444-repeated-actions",
@@ -61,10 +59,9 @@
     "source_url": "https://github.com/sst/opencode/issues/3444",
     "calls": [
       {"tool": "shell.run", "arguments": {"command": "npm test"}},
-      {"tool": "shell.run", "arguments": {"command": "npm test"}},
       {"tool": "shell.run", "arguments": {"command": "npm test"}}
     ],
-    "expected_decisions": ["allow", "allow", "block"]
+    "expected_decisions": ["allow", "block"]
   },
   {
     "id": "hermes-7069-retry-loop",
@@ -72,10 +69,9 @@
     "source_url": "https://github.com/NousResearch/hermes-agent/issues/7069",
     "calls": [
       {"tool": "model.generate", "arguments": {"request_id": "same-request"}},
-      {"tool": "model.generate", "arguments": {"request_id": "same-request"}},
       {"tool": "model.generate", "arguments": {"request_id": "same-request"}}
     ],
-    "expected_decisions": ["allow", "allow", "block"]
+    "expected_decisions": ["allow", "block"]
   },
   {
     "id": "vscode-275957-delegation-loop",
@@ -83,10 +79,9 @@
     "source_url": "https://github.com/microsoft/vscode/issues/275957",
     "calls": [
       {"tool": "agent.delegate", "arguments": {"task": "debug tests"}},
-      {"tool": "agent.delegate", "arguments": {"task": "debug tests"}},
       {"tool": "agent.delegate", "arguments": {"task": "debug tests"}}
     ],
-    "expected_decisions": ["allow", "allow", "block"]
+    "expected_decisions": ["allow", "block"]
   },
   {
     "id": "mcp-3662-ssrf-navigation",
