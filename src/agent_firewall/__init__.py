@@ -7,6 +7,7 @@ from .approvals import (
     ApprovalRecord,
     SQLiteApprovalQueue,
 )
+from .dashboard import Dashboard, read_events
 from .exceptions import ApprovalRequired, FirewallError, ToolCallBlocked
 from .firewall import Firewall
 from .mcp_proxy import McpStdioProxy, TerminalApprover
@@ -25,6 +26,7 @@ __all__ = [
     "Budget",
     "Decision",
     "DecisionKind",
+    "Dashboard",
     "Firewall",
     "FirewallError",
     "JsonlAuditLog",
@@ -33,6 +35,7 @@ __all__ = [
     "Policy",
     "PolicyConfigError",
     "Rule",
+    "read_events",
     "SQLiteStateStore",
     "SQLiteApprovalQueue",
     "StateStore",
