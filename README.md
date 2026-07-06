@@ -2,12 +2,28 @@
 
 [![CI](https://github.com/haseebraza715/agent-firewall/actions/workflows/ci.yml/badge.svg)](https://github.com/haseebraza715/agent-firewall/actions/workflows/ci.yml)
 
+![Agent Firewall blocking and approval-gating MCP calls](docs/media/agent-firewall-demo.gif)
+
+## Why
+
+**[11 real, sourced agent failures](docs/incidents/), each stopped by a deterministic policy.**
+They include repeat loops, missing approvals, destructive file operations, and unsafe navigation.
+The corpus maps every report to the smallest runtime control that would have stopped or paused it.
+
 Agent Firewall is a small, framework-neutral runtime guard for AI-agent tool
 calls. It decides whether a proposed call should be allowed, blocked, or held
 for human approval **before the tool executes**.
 
 This repository contains the first testable MVP. It has no runtime
 dependencies and supports Python 3.9+.
+
+## Install
+
+> **Available after PyPI publish:** the package has not been uploaded yet.
+
+```bash
+pip install agent-firewall
+```
 
 ## What works today
 
@@ -185,10 +201,9 @@ the audit destination is trusted.
 
 ## Replay real complaints
 
-The included corpus models ten public reports plus one synthetic cost-cap
-check. The [Agent Incident Wall](docs/incidents/README.md) maps every public
-report to the smallest deterministic policy that would have stopped or paused
-the action.
+The included corpus models 11 sourced reports. The
+[Agent Incident Wall](docs/incidents/README.md) maps every report to the
+smallest deterministic policy that would have stopped or paused the action.
 
 Examples include:
 
