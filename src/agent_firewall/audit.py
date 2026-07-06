@@ -6,7 +6,7 @@ from pathlib import Path
 from threading import Lock
 from typing import Any, Dict, Optional
 
-from .models import Decision, ToolCall, Usage
+from .models import ArgumentAuditMode, Decision, ToolCall, Usage
 
 
 class JsonlAuditLog:
@@ -23,6 +23,7 @@ class JsonlAuditLog:
         usage: Usage,
         decision: Optional[Decision] = None,
         error: Optional[str] = None,
+        argument_mode: ArgumentAuditMode = ArgumentAuditMode.NONE,
     ) -> None:
         entry: Dict[str, Any] = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -39,9 +40,23 @@ class JsonlAuditLog:
             entry.update(decision.as_dict())
         if error is not None:
             entry["error"] = error
+        if argument_mode is ArgumentAuditMode.HASH:
+            entry["call_fingerprint"] = call.fingerprint
+        elif argument_mode is ArgumentAuditMode.REDACTED:
+            entry["arguments"] = _redact(call.arguments)
+        elif argument_mode is ArgumentAuditMode.FULL:
+            entry["arguments"] = call.arguments
 
-        line = json.dumps(entry, separators=(",", ":"), sort_keys=True)
+        line = json.dumps(entry, separators=(",", ":"), sort_keys=True, default=repr)
         with self._lock:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             with self.path.open("a", encoding="utf-8") as handle:
                 handle.write(line + "\n")
+
+
+def _redact(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(key): _redact(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_redact(item) for item in value]
+    return "[REDACTED]"

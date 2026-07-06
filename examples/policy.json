@@ -1,8 +1,10 @@
 {
   "default_decision": "block",
+  "audit_arguments": "hash",
   "budget": {
     "max_calls": 10,
     "max_calls_per_tool": 3,
+    "max_identical_calls": 2,
     "max_cost_usd": "0.50"
   },
   "rules": [
@@ -10,6 +12,14 @@
       "tool": "database.query",
       "decision": "allow",
       "reason": "read-only database queries are allowed"
+    },
+    {
+      "tool": "email.*",
+      "arguments": {
+        "to": "*@mycompany.com"
+      },
+      "decision": "allow",
+      "reason": "company email recipients are pre-approved"
     },
     {
       "tool": "email.*",

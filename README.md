@@ -11,9 +11,9 @@ dependencies and supports Python 3.9+.
 
 ## What works today
 
-- Ordered allow, block, and approval rules with glob matching
+- Ordered allow, block, and approval rules matched by tool name and arguments
 - Per-run call and estimated-cost caps
-- Per-tool repetition caps for runaway loops
+- Per-tool and identical-call repetition caps for runaway loops
 - Synchronous and asynchronous tool wrappers
 - Human approval callbacks
 - Thread-safe budget reservation
@@ -82,9 +82,11 @@ Policies are JSON and fail closed by default:
 ```json
 {
   "default_decision": "block",
+  "audit_arguments": "hash",
   "budget": {
     "max_calls": 10,
     "max_calls_per_tool": 3,
+    "max_identical_calls": 2,
     "max_cost_usd": "0.50"
   },
   "rules": [
@@ -95,6 +97,12 @@ Policies are JSON and fail closed by default:
     },
     {
       "tool": "email.*",
+      "arguments": {"to": "*@mycompany.com"},
+      "decision": "allow",
+      "reason": "company recipient"
+    },
+    {
+      "tool": "email.*",
       "decision": "require_approval",
       "reason": "external side effect"
     }
@@ -102,11 +110,16 @@ Policies are JSON and fail closed by default:
 }
 ```
 
-Rules are evaluated in order and the first match wins. Tool patterns use shell
-globs such as `email.*`.
+Rules are evaluated in order and the first match wins. Tool names and string
+argument values use shell globs. Non-string argument values use exact matching;
+a missing argument does not match.
 
 Cost enforcement uses the estimate supplied by the caller. Agent Firewall does
 not calculate provider token costs in this MVP.
+
+Argument auditing defaults to `none`. Use `hash` to compare calls without
+logging values, `redacted` to retain only argument shape, or `full` only when
+the audit destination is trusted.
 
 ## Replay real complaints
 

@@ -4,7 +4,14 @@ import unittest
 from decimal import Decimal
 from pathlib import Path
 
-from agent_firewall import DecisionKind, Policy, PolicyConfigError, ToolCall, Usage
+from agent_firewall import (
+    ArgumentAuditMode,
+    DecisionKind,
+    Policy,
+    PolicyConfigError,
+    ToolCall,
+    Usage,
+)
 
 
 class PolicyTests(unittest.TestCase):
@@ -32,6 +39,97 @@ class PolicyTests(unittest.TestCase):
         self.assertEqual(decision.kind, DecisionKind.BLOCK)
         self.assertEqual(decision.code, "default")
 
+    def test_string_argument_patterns_use_glob_matching(self):
+        policy = Policy.from_dict(
+            {
+                "default_decision": "block",
+                "rules": [
+                    {
+                        "tool": "email.send",
+                        "arguments": {"to": "*@mycompany.com"},
+                        "decision": "allow",
+                    }
+                ],
+            }
+        )
+
+        internal = policy.evaluate(
+            ToolCall.create("email.send", {"to": "person@mycompany.com"}),
+            Usage(),
+        )
+        external = policy.evaluate(
+            ToolCall.create("email.send", {"to": "person@example.com"}),
+            Usage(),
+        )
+
+        self.assertEqual(internal.kind, DecisionKind.ALLOW)
+        self.assertEqual(external.kind, DecisionKind.BLOCK)
+
+    def test_non_string_argument_patterns_use_exact_matching(self):
+        policy = Policy.from_dict(
+            {
+                "rules": [
+                    {
+                        "tool": "payment.charge",
+                        "arguments": {"cents": 500, "live": False},
+                        "decision": "allow",
+                    }
+                ]
+            }
+        )
+
+        exact = policy.evaluate(
+            ToolCall.create("payment.charge", {"cents": 500, "live": False}),
+            Usage(),
+        )
+        changed = policy.evaluate(
+            ToolCall.create("payment.charge", {"cents": 501, "live": False}),
+            Usage(),
+        )
+
+        self.assertEqual(exact.kind, DecisionKind.ALLOW)
+        self.assertEqual(changed.kind, DecisionKind.BLOCK)
+
+    def test_missing_rule_argument_does_not_match(self):
+        policy = Policy.from_dict(
+            {
+                "rules": [
+                    {
+                        "tool": "email.send",
+                        "arguments": {"to": "*@mycompany.com"},
+                        "decision": "allow",
+                    }
+                ]
+            }
+        )
+
+        decision = policy.evaluate(ToolCall.create("email.send"), Usage())
+
+        self.assertEqual(decision.kind, DecisionKind.BLOCK)
+
+    def test_invalid_rule_arguments_are_rejected(self):
+        with self.assertRaisesRegex(PolicyConfigError, "arguments must be an object"):
+            Policy.from_dict(
+                {
+                    "rules": [
+                        {
+                            "tool": "email.send",
+                            "arguments": "not-an-object",
+                            "decision": "allow",
+                        }
+                    ]
+                }
+            )
+
+    def test_argument_auditing_defaults_to_none(self):
+        policy = Policy.from_dict({})
+
+        self.assertEqual(policy.audit_arguments, ArgumentAuditMode.NONE)
+
+    def test_invalid_argument_audit_mode_is_rejected(self):
+        with self.assertRaisesRegex(PolicyConfigError, "audit_arguments"):
+            Policy.from_dict({"audit_arguments": "unsafe"})
+
     def test_total_call_budget_blocks_next_call(self):
         policy = Policy.from_dict(
             {"default_decision": "allow", "budget": {"max_calls": 1}}
@@ -56,6 +154,31 @@ class PolicyTests(unittest.TestCase):
 
         self.assertEqual(blocked.code, "max_calls_per_tool")
         self.assertEqual(allowed.kind, DecisionKind.ALLOW)
+
+    def test_identical_call_budget_includes_canonical_arguments(self):
+        policy = Policy.from_dict(
+            {"default_decision": "allow", "budget": {"max_identical_calls": 1}}
+        )
+        usage = Usage()
+        usage.record(ToolCall.create("search", {"query": "firewall", "limit": 5}))
+
+        repeated = policy.evaluate(
+            ToolCall.create("search", {"limit": 5, "query": "firewall"}),
+            usage,
+        )
+        changed = policy.evaluate(
+            ToolCall.create("search", {"query": "firewall", "limit": 10}),
+            usage,
+        )
+
+        self.assertEqual(repeated.code, "max_identical_calls")
+        self.assertEqual(changed.kind, DecisionKind.ALLOW)
+
+    def test_fingerprint_includes_tool_name(self):
+        first = ToolCall.create("search.web", {"query": "same"})
+        second = ToolCall.create("search.files", {"query": "same"})
+
+        self.assertNotEqual(first.fingerprint, second.fingerprint)
 
     def test_cost_budget_uses_projected_cost(self):
         policy = Policy.from_dict(

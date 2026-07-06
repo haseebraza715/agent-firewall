@@ -119,6 +119,52 @@ class FirewallTests(unittest.TestCase):
         self.assertNotIn("do-not-log", text)
         self.assertEqual([entry["event"] for entry in entries], ["allowed", "executed"])
 
+    def test_hash_audit_records_fingerprint_without_values(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "audit.jsonl"
+            policy = Policy.from_dict(
+                {"default_decision": "allow", "audit_arguments": "hash"}
+            )
+            firewall = Firewall(policy, audit_log=JsonlAuditLog(path))
+
+            firewall.call("demo.tool", lambda secret: secret, secret="do-not-log")
+            entry = json.loads(path.read_text(encoding="utf-8").splitlines()[0])
+
+        self.assertNotIn("do-not-log", json.dumps(entry))
+        self.assertEqual(len(entry["call_fingerprint"]), 64)
+
+    def test_redacted_audit_preserves_shape_not_values(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "audit.jsonl"
+            policy = Policy.from_dict(
+                {"default_decision": "allow", "audit_arguments": "redacted"}
+            )
+            firewall = Firewall(policy, audit_log=JsonlAuditLog(path))
+
+            firewall.call(
+                "demo.tool",
+                lambda **kwargs: kwargs,
+                recipient="person@example.com",
+                metadata={"secret": "token"},
+            )
+            entry = json.loads(path.read_text(encoding="utf-8").splitlines()[0])
+
+        self.assertEqual(entry["arguments"]["recipient"], "[REDACTED]")
+        self.assertEqual(entry["arguments"]["metadata"]["secret"], "[REDACTED]")
+
+    def test_full_audit_is_explicitly_opt_in(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "audit.jsonl"
+            policy = Policy.from_dict(
+                {"default_decision": "allow", "audit_arguments": "full"}
+            )
+            firewall = Firewall(policy, audit_log=JsonlAuditLog(path))
+
+            firewall.call("demo.tool", lambda value: value, value="visible")
+            entry = json.loads(path.read_text(encoding="utf-8").splitlines()[0])
+
+        self.assertEqual(entry["arguments"]["value"], "visible")
+
     def test_failed_call_still_consumes_reserved_budget(self):
         firewall = Firewall(
             Policy.from_dict(

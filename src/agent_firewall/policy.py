@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal
 from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional
 
-from .models import Decision, DecisionKind, ToolCall, Usage, money
+from .models import ArgumentAuditMode, Decision, DecisionKind, ToolCall, Usage, money
 
 
 class PolicyConfigError(ValueError):
@@ -18,6 +18,7 @@ class PolicyConfigError(ValueError):
 class Budget:
     max_calls: Optional[int] = None
     max_calls_per_tool: Optional[int] = None
+    max_identical_calls: Optional[int] = None
     max_cost_usd: Optional[Decimal] = None
 
 
@@ -26,6 +27,7 @@ class Rule:
     tool: str
     decision: DecisionKind
     reason: str
+    arguments: Mapping[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -33,6 +35,7 @@ class Policy:
     default_decision: DecisionKind
     budget: Budget
     rules: List[Rule]
+    audit_arguments: ArgumentAuditMode = ArgumentAuditMode.NONE
 
     @classmethod
     def load(cls, path: Path) -> "Policy":
@@ -53,6 +56,7 @@ class Policy:
 
         default = _decision(raw.get("default_decision", "block"), "default_decision")
         budget = _budget(raw.get("budget", {}))
+        audit_arguments = _audit_mode(raw.get("audit_arguments", "none"))
         rules_raw = raw.get("rules", [])
         if not isinstance(rules_raw, list):
             raise PolicyConfigError("rules must be a list")
@@ -71,6 +75,11 @@ class Policy:
                 raise PolicyConfigError(
                     "rules[{}].reason must be a non-empty string".format(index)
                 )
+            arguments = item.get("arguments", {})
+            if not isinstance(arguments, dict):
+                raise PolicyConfigError(
+                    "rules[{}].arguments must be an object".format(index)
+                )
             rules.append(
                 Rule(
                     tool=tool,
@@ -78,9 +87,15 @@ class Policy:
                         item.get("decision"), "rules[{}].decision".format(index)
                     ),
                     reason=reason,
+                    arguments=dict(arguments),
                 )
             )
-        return cls(default_decision=default, budget=budget, rules=rules)
+        return cls(
+            default_decision=default,
+            budget=budget,
+            rules=rules,
+            audit_arguments=audit_arguments,
+        )
 
     def evaluate(self, call: ToolCall, usage: Usage) -> Decision:
         budget_decision = self._check_budget(call, usage)
@@ -88,7 +103,9 @@ class Policy:
             return budget_decision
 
         for index, rule in enumerate(self.rules):
-            if fnmatchcase(call.name, rule.tool):
+            if fnmatchcase(call.name, rule.tool) and _arguments_match(
+                call.arguments, rule.arguments
+            ):
                 return Decision(
                     kind=rule.decision,
                     reason=rule.reason,
@@ -120,6 +137,15 @@ class Policy:
                     "max_calls_per_tool",
                 )
 
+        if self.budget.max_identical_calls is not None:
+            prior_calls = usage.calls_by_fingerprint.get(call.fingerprint, 0)
+            if prior_calls >= self.budget.max_identical_calls:
+                return Decision(
+                    DecisionKind.BLOCK,
+                    "identical tool-call budget exhausted",
+                    "max_identical_calls",
+                )
+
         if self.budget.max_cost_usd is not None:
             projected = usage.estimated_cost_usd + call.estimated_cost_usd
             if projected > self.budget.max_cost_usd:
@@ -139,6 +165,16 @@ def _decision(value: Any, field: str) -> DecisionKind:
         raise PolicyConfigError("{} must be one of: {}".format(field, allowed)) from exc
 
 
+def _audit_mode(value: Any) -> ArgumentAuditMode:
+    try:
+        return ArgumentAuditMode(value)
+    except (TypeError, ValueError) as exc:
+        allowed = ", ".join(item.value for item in ArgumentAuditMode)
+        raise PolicyConfigError(
+            "audit_arguments must be one of: {}".format(allowed)
+        ) from exc
+
+
 def _budget(raw: Any) -> Budget:
     if not isinstance(raw, dict):
         raise PolicyConfigError("budget must be an object")
@@ -146,6 +182,9 @@ def _budget(raw: Any) -> Budget:
         max_calls=_positive_int(raw.get("max_calls"), "budget.max_calls"),
         max_calls_per_tool=_positive_int(
             raw.get("max_calls_per_tool"), "budget.max_calls_per_tool"
+        ),
+        max_identical_calls=_positive_int(
+            raw.get("max_identical_calls"), "budget.max_identical_calls"
         ),
         max_cost_usd=_optional_money(raw.get("max_cost_usd"), "budget.max_cost_usd"),
     )
@@ -166,3 +205,19 @@ def _optional_money(value: Any, field: str) -> Optional[Decimal]:
         return money(value)
     except ValueError as exc:
         raise PolicyConfigError("{}: {}".format(field, exc)) from exc
+
+
+def _arguments_match(
+    actual: Mapping[str, Any],
+    expected: Mapping[str, Any],
+) -> bool:
+    for key, pattern in expected.items():
+        if key not in actual:
+            return False
+        value = actual[key]
+        if isinstance(pattern, str):
+            if not isinstance(value, str) or not fnmatchcase(value, pattern):
+                return False
+        elif value != pattern:
+            return False
+    return True
