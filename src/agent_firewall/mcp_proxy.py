@@ -1,16 +1,16 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 from .approvals import SQLiteApprovalQueue
 from .exceptions import FirewallError
 from .firewall import Approver, Firewall
+from .jsonrpc import decode_message, encode_message, request_key
 from .models import Decision, ToolCall
 
 POLICY_ERROR = -32001
@@ -77,7 +77,7 @@ class McpStdioProxy:
         return await self.process.wait()
 
     async def _handle_client_line(self, line: bytes) -> None:
-        message = _decode(line)
+        message = decode_message(line)
         if message is None:
             await self._write_child(line)
             return
@@ -141,7 +141,7 @@ class McpStdioProxy:
         self,
         message: Mapping[str, Any],
     ) -> Mapping[str, Any]:
-        key = _request_key(message["id"])
+        key = request_key(message["id"])
         if key in self.pending:
             return {
                 "jsonrpc": "2.0",
@@ -156,7 +156,7 @@ class McpStdioProxy:
         )
         self.pending[key] = future
         try:
-            await self._write_child(_encode(message))
+            await self._write_child(encode_message(message))
             return await future
         finally:
             self.pending.pop(key, None)
@@ -169,11 +169,11 @@ class McpStdioProxy:
                 line = await self.process.stdout.readline()
                 if not line:
                     break
-                message = _decode(line)
+                message = decode_message(line)
                 if message is None or "method" in message or "id" not in message:
                     self._write_client_bytes(line)
                     continue
-                future = self.pending.get(_request_key(message["id"]))
+                future = self.pending.get(request_key(message["id"]))
                 if future is None or future.done():
                     self._write_client_bytes(line)
                 else:
@@ -193,7 +193,7 @@ class McpStdioProxy:
 
     @staticmethod
     def _write_client(message: Mapping[str, Any]) -> None:
-        McpStdioProxy._write_client_bytes(_encode(message))
+        McpStdioProxy._write_client_bytes(encode_message(message))
 
     @staticmethod
     def _write_client_bytes(line: bytes) -> None:
@@ -232,21 +232,3 @@ async def run_mcp_proxy(
         state_path=state_path,
     )
     return await McpStdioProxy(firewall, command).run()
-
-
-def _request_key(request_id: Any) -> str:
-    return json.dumps(request_id, sort_keys=True, separators=(",", ":"))
-
-
-def _decode(line: bytes) -> Mapping[str, Any] | None:
-    try:
-        message = json.loads(line)
-    except (UnicodeDecodeError, json.JSONDecodeError):
-        return None
-    return cast(Mapping[str, Any], message) if isinstance(message, dict) else None
-
-
-def _encode(message: Mapping[str, Any]) -> bytes:
-    return (
-        json.dumps(message, separators=(",", ":"), ensure_ascii=False) + "\n"
-    ).encode("utf-8")

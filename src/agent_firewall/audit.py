@@ -6,6 +6,7 @@ from pathlib import Path
 from threading import Lock
 from typing import Any
 
+from .exceptions import AuditWriteError
 from .models import ArgumentAuditMode, Decision, ToolCall, Usage
 
 
@@ -48,10 +49,15 @@ class JsonlAuditLog:
             entry["arguments"] = call.arguments
 
         line = json.dumps(entry, separators=(",", ":"), sort_keys=True, default=repr)
-        with self._lock:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            with self.path.open("a", encoding="utf-8") as handle:
-                handle.write(line + "\n")
+        try:
+            with self._lock:
+                self.path.parent.mkdir(parents=True, exist_ok=True)
+                with self.path.open("a", encoding="utf-8") as handle:
+                    handle.write(line + "\n")
+        except OSError as exc:
+            raise AuditWriteError(
+                f"could not append firewall audit record to {self.path}"
+            ) from exc
 
 
 def _redact(value: Any) -> Any:

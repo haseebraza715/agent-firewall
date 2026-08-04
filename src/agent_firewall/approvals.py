@@ -3,11 +3,13 @@ from __future__ import annotations
 import asyncio
 import sqlite3
 import time
+from contextlib import closing
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .exceptions import StorageError
 from .models import Decision, ToolCall
 
 
@@ -73,7 +75,7 @@ class SQLiteApprovalQueue:
         return self.get(call.id).status == "approved"
 
     def request(self, call: ToolCall, decision: Decision) -> ApprovalRecord:
-        with self._connect() as connection:
+        with closing(self._connect()) as connection, connection:
             connection.execute(
                 """
                 INSERT OR IGNORE INTO approvals
@@ -85,7 +87,7 @@ class SQLiteApprovalQueue:
         return self.get(call.id)
 
     def pending(self) -> list[ApprovalRecord]:
-        with self._connect() as connection:
+        with closing(self._connect()) as connection:
             rows = connection.execute(
                 """
                 SELECT call_id, tool, reason, requested_at, status, decided_at
@@ -97,7 +99,7 @@ class SQLiteApprovalQueue:
         return [ApprovalRecord(*row) for row in rows]
 
     def get(self, call_id: str) -> ApprovalRecord:
-        with self._connect() as connection:
+        with closing(self._connect()) as connection:
             row = connection.execute(
                 """
                 SELECT call_id, tool, reason, requested_at, status, decided_at
@@ -145,8 +147,9 @@ class SQLiteApprovalQueue:
         return self.get(call_id)
 
     def _initialize(self) -> None:
-        with self._connect() as connection:
-            connection.execute(
+        try:
+            with closing(self._connect()) as connection, connection:
+                connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS approvals (
                     call_id TEXT PRIMARY KEY,
@@ -159,7 +162,11 @@ class SQLiteApprovalQueue:
                     decided_at TEXT
                 )
                 """
-            )
+                )
+        except sqlite3.Error as exc:
+            raise StorageError(
+                f"could not initialize approval state at {self.path}"
+            ) from exc
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(str(self.path), timeout=10)

@@ -16,3 +16,11 @@ class ToolCallBlocked(FirewallError):
 
 class ApprovalRequired(FirewallError):
     pass
+
+
+class StorageError(RuntimeError):
+    """A firewall security record could not be read or written safely."""
+
+
+class AuditWriteError(StorageError):
+    """The append-only audit record could not be persisted (fail closed)."""

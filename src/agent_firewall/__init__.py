@@ -9,7 +9,13 @@ from .approvals import (
 )
 from .audit import JsonlAuditLog
 from .dashboard import Dashboard, read_events
-from .exceptions import ApprovalRequired, FirewallError, ToolCallBlocked
+from .exceptions import (
+    ApprovalRequired,
+    AuditWriteError,
+    FirewallError,
+    StorageError,
+    ToolCallBlocked,
+)
 from .firewall import Firewall
 from .mcp_proxy import McpStdioProxy, TerminalApprover
 from .models import ArgumentAuditMode, Decision, DecisionKind, ToolCall, Usage
@@ -22,6 +28,7 @@ __all__ = [
     "ApprovalNotFound",
     "ApprovalRecord",
     "ApprovalRequired",
+    "AuditWriteError",
     "ArgumentAuditMode",
     "Budget",
     "Decision",
@@ -39,6 +46,7 @@ __all__ = [
     "SQLiteStateStore",
     "SQLiteApprovalQueue",
     "StateStore",
+    "StorageError",
     "ToolCall",
     "ToolCallBlocked",
     "TerminalApprover",
