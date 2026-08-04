@@ -139,6 +139,53 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(response.headers["X-Frame-Options"], "DENY")
         self.assertTrue(server.startswith("AgentFirewall/0.2.0"))
 
+    def test_foreign_host_header_is_rejected(self):
+        request = Request(
+            self.dashboard.address + "/api/events",
+            headers={"Host": "attacker.example"},
+        )
+
+        with self.assertRaises(HTTPError) as caught:
+            urlopen(request, timeout=2)
+
+        self.assertEqual(caught.exception.code, 421)
+
+    def test_foreign_origin_post_is_rejected_despite_token(self):
+        call = self.add_pending_approval()
+        request = Request(
+            self.dashboard.address + "/api/approvals/" + call.id,
+            data=b'{"decision":"approved"}',
+            method="POST",
+            headers={
+                "Content-Type": "application/json",
+                "X-Agent-Firewall-Token": "test-token",
+                "Origin": "http://attacker.example",
+            },
+        )
+
+        with self.assertRaises(HTTPError) as caught:
+            urlopen(request, timeout=2)
+
+        self.assertEqual(caught.exception.code, 403)
+
+    def test_loopback_origin_post_is_accepted(self):
+        call = self.add_pending_approval()
+        request = Request(
+            self.dashboard.address + "/api/approvals/" + call.id,
+            data=b'{"decision":"approved"}',
+            method="POST",
+            headers={
+                "Content-Type": "application/json",
+                "X-Agent-Firewall-Token": "test-token",
+                "Origin": self.dashboard.address,
+            },
+        )
+
+        with urlopen(request, timeout=2) as response:
+            record = json.loads(response.read())
+
+        self.assertEqual(record["status"], "approved")
+
     def test_non_loopback_binding_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "loopback"):
             Dashboard(

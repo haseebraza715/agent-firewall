@@ -3,10 +3,23 @@ import unittest
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from agent_firewall import Firewall, Policy, SQLiteStateStore, ToolCallBlocked
+from agent_firewall import (
+    Firewall,
+    Policy,
+    SQLiteStateStore,
+    StorageError,
+    ToolCallBlocked,
+)
 
 
 class SQLiteStateStoreTests(unittest.TestCase):
+    def test_corrupt_database_has_targeted_error(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "firewall.db"
+            path.write_bytes(b"not a sqlite database")
+            with self.assertRaisesRegex(StorageError, "initialize firewall state"):
+                SQLiteStateStore(path)
+
     def test_budget_survives_new_firewall_instance(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "firewall.db"
