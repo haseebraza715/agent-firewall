@@ -43,11 +43,12 @@ agent-firewall check \
 The output is machine-readable:
 
 ```json
-{"code": "rule_match", "decision": "require_approval", "reason": "outbound email requires a human decision", "rule_index": 1}
+{"code": "rule_match", "decision": "require_approval", "reason": "outbound email requires a human decision", "rule_index": 2}
 ```
 
-Exit codes are `0` for allow, `3` for approval required, `4` for block, and `2`
-for invalid input.
+The example intentionally exits with status `3` because human approval is
+required. Exit codes are `0` for allow, `3` for approval required, `4` for
+block, and `2` for invalid input.
 
 ## Guard a real tool
 
@@ -182,6 +183,12 @@ not calculate provider token costs in this MVP.
 Argument auditing defaults to `none`. Use `hash` to compare calls without
 logging values, `redacted` to retain only argument shape, or `full` only when
 the audit destination is trusted.
+
+Audit persistence is fail-closed: if the JSONL destination cannot be created
+or appended, the guarded call raises `AuditWriteError` instead of executing
+without a security record. SQLite initialization and state failures raise
+`StorageError` with the affected path while retaining the original database
+exception as the cause.
 
 ## Replay real complaints
 
