@@ -66,9 +66,7 @@ class ConnectionLifecycleTests(unittest.TestCase):
         with patch("agent_firewall.approvals.sqlite3.connect", tracker.connect):
             queue = SQLiteApprovalQueue(self.path)
             call = ToolCall.create("email.send", {"to": "a@example.com"}, 0)
-            decision_stub = type(
-                "DecisionStub", (), {"reason": "needs approval"}
-            )()
+            decision_stub = type("DecisionStub", (), {"reason": "needs approval"})()
             queue.request(call, decision_stub)
             queue.pending()
             queue.get(call.id)

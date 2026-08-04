@@ -150,7 +150,7 @@ class SQLiteApprovalQueue:
         try:
             with closing(self._connect()) as connection, connection:
                 connection.execute(
-                """
+                    """
                 CREATE TABLE IF NOT EXISTS approvals (
                     call_id TEXT PRIMARY KEY,
                     tool TEXT NOT NULL,

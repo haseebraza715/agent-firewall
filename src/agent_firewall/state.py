@@ -103,7 +103,7 @@ class SQLiteStateStore:
             # commits the schema statements on success.
             with closing(self._connect()) as connection, connection:
                 connection.executescript(
-                """
+                    """
                 CREATE TABLE IF NOT EXISTS run_usage (
                     id INTEGER PRIMARY KEY CHECK (id = 1),
                     tool_calls INTEGER NOT NULL,
