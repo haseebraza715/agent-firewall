@@ -11,11 +11,19 @@ from agent_firewall import (
     Decision,
     DecisionKind,
     SQLiteApprovalQueue,
+    StorageError,
     ToolCall,
 )
 
 
 class ApprovalQueueTests(unittest.TestCase):
+    def test_corrupt_database_has_targeted_error(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "firewall.db"
+            path.write_bytes(b"not a sqlite database")
+            with self.assertRaisesRegex(StorageError, "initialize approval state"):
+                SQLiteApprovalQueue(path)
+
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
         self.path = Path(self.directory.name) / "firewall.db"

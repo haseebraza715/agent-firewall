@@ -16,6 +16,19 @@ from .state import SQLiteStateStore
 
 
 class Dashboard:
+    """Loopback-only web dashboard for firewall state and approvals.
+
+    Threat model: processes running as the same OS user are trusted — they can
+    read the state file directly, so the HTTP surface does not try to defend
+    against them. The defenses here target the browser:
+
+    - every request must carry a loopback ``Host`` header, which blocks DNS
+      rebinding pages from reaching the API;
+    - mutating (POST) requests require the per-process token, which the page
+      embeds, acting as cross-site request forgery protection, and must not
+      carry a non-loopback ``Origin``.
+    """
+
     def __init__(
         self,
         policy_path: Path,
@@ -95,6 +108,9 @@ def _handler(dashboard: Dashboard) -> type[BaseHTTPRequestHandler]:
         server_version = f"AgentFirewall/{__version__}"
 
         def do_GET(self) -> None:
+            if not _host_allowed(self.headers.get("Host")):
+                self._json(421, {"error": "invalid host header"})
+                return
             path = urlparse(self.path).path
             if path == "/":
                 nonce = secrets.token_urlsafe(16)
@@ -126,6 +142,12 @@ def _handler(dashboard: Dashboard) -> type[BaseHTTPRequestHandler]:
                 self._json(404, {"error": "not found"})
 
         def do_POST(self) -> None:
+            if not _host_allowed(self.headers.get("Host")):
+                self._json(421, {"error": "invalid host header"})
+                return
+            if not _origin_allowed(self.headers.get("Origin")):
+                self._json(403, {"error": "invalid request origin"})
+                return
             path = urlparse(self.path).path
             prefix = "/api/approvals/"
             if not path.startswith(prefix):
@@ -205,6 +227,33 @@ def _is_loopback(host: str) -> bool:
         return ipaddress.ip_address(host).is_loopback
     except ValueError:
         return False
+
+
+def _host_allowed(header: str | None) -> bool:
+    """Accept only loopback names in Host, defeating DNS-rebinding pages."""
+    if not header:
+        return False
+    host = header.strip()
+    if host.startswith("["):
+        end = host.find("]")
+        if end == -1:
+            return False
+        name = host[1:end]
+    elif host.count(":") == 1:
+        name = host.rsplit(":", 1)[0]
+    else:
+        name = host
+    return _is_loopback(name)
+
+
+def _origin_allowed(header: str | None) -> bool:
+    """Non-browser clients send no Origin; browsers must be same-loopback."""
+    if header is None:
+        return True
+    parsed = urlparse(header.strip())
+    if parsed.scheme != "http" or not parsed.hostname:
+        return False
+    return _is_loopback(parsed.hostname)
 
 
 _HTML = """<!doctype html>

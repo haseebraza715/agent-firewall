@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import sqlite3
+from contextlib import closing
 from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
 from threading import Lock
 from typing import Protocol
 
+from .exceptions import StorageError
 from .models import Decision, DecisionKind, ToolCall, Usage
 from .policy import Policy
 
@@ -59,8 +61,13 @@ class SQLiteStateStore:
         self._initialize()
 
     def usage(self) -> Usage:
-        with self._connect() as connection:
-            return self._load_usage(connection)
+        try:
+            with closing(self._connect()) as connection:
+                return self._load_usage(connection)
+        except sqlite3.Error as exc:
+            raise StorageError(
+                f"could not read firewall state from {self.path}"
+            ) from exc
 
     def evaluate_and_reserve(
         self,
@@ -79,6 +86,11 @@ class SQLiteStateStore:
                 self._record(connection, usage, call)
             connection.commit()
             return StateResult(decision, usage)
+        except sqlite3.Error as exc:
+            connection.rollback()
+            raise StorageError(
+                f"could not update firewall state at {self.path}"
+            ) from exc
         except Exception:
             connection.rollback()
             raise
@@ -86,9 +98,12 @@ class SQLiteStateStore:
             connection.close()
 
     def _initialize(self) -> None:
-        with self._connect() as connection:
-            connection.executescript(
-                """
+        try:
+            # closing() releases the handle; the inner `connection` context
+            # commits the schema statements on success.
+            with closing(self._connect()) as connection, connection:
+                connection.executescript(
+                    """
                 CREATE TABLE IF NOT EXISTS run_usage (
                     id INTEGER PRIMARY KEY CHECK (id = 1),
                     tool_calls INTEGER NOT NULL,
@@ -108,7 +123,11 @@ class SQLiteStateStore:
                     call_count INTEGER NOT NULL
                 );
                 """
-            )
+                )
+        except sqlite3.Error as exc:
+            raise StorageError(
+                f"could not initialize firewall state at {self.path}"
+            ) from exc
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(str(self.path), timeout=10)
