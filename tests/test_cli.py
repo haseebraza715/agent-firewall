@@ -4,7 +4,7 @@ from contextlib import redirect_stdout
 from pathlib import Path
 
 from agent_firewall import Policy
-from agent_firewall.cli import _run_scenario, build_parser, main
+from agent_firewall.cli import _run_scenario, _short_source, build_parser, main
 
 ROOT = Path(__file__).resolve().parents[1]
 POLICY = ROOT / "examples" / "policy.json"
@@ -74,6 +74,102 @@ class CliTests(unittest.TestCase):
         self.assertEqual(status, 0)
         self.assertIn('"failed": 0', output.getvalue())
         self.assertIn('"total": 11', output.getvalue())
+
+    def test_check_text_format_names_tool_and_reason(self):
+        output = io.StringIO()
+
+        with redirect_stdout(output):
+            status = main(
+                [
+                    "check",
+                    "--policy",
+                    str(POLICY),
+                    "--tool",
+                    "email.send",
+                    "--arguments",
+                    '{"to": "customer@example.com"}',
+                    "--format",
+                    "text",
+                ]
+            )
+
+        rendered = output.getvalue()
+        self.assertEqual(status, 3)
+        self.assertIn("require_approval", rendered)
+        self.assertIn("email.send", rendered)
+        self.assertIn("outbound email requires a human decision", rendered)
+        self.assertNotIn("{", rendered)
+
+    def test_replay_text_format_summarises_every_scenario(self):
+        output = io.StringIO()
+
+        with redirect_stdout(output):
+            status = main(
+                [
+                    "replay",
+                    "--policy",
+                    str(POLICY),
+                    "--scenarios",
+                    str(SCENARIOS),
+                    "--format",
+                    "text",
+                ]
+            )
+
+        rendered = output.getvalue()
+        self.assertEqual(status, 0)
+        self.assertEqual(rendered.count("CAUGHT"), 11)
+        self.assertNotIn("MISSED", rendered)
+        self.assertIn("11 caught, 0 missed of 11 scenarios", rendered)
+        self.assertIn("Agent repeats database queries until recursion limit", rendered)
+        self.assertIn("langchain-ai/langgraph#6731", rendered)
+        self.assertNotIn("https://", rendered)
+
+    def test_text_output_is_ascii_and_fits_eighty_columns(self):
+        """The recorded terminal demo renders this output in an 80-column SVG."""
+        output = io.StringIO()
+
+        with redirect_stdout(output):
+            main(
+                [
+                    "replay",
+                    "--policy",
+                    str(POLICY),
+                    "--scenarios",
+                    str(SCENARIOS),
+                    "--format",
+                    "text",
+                ]
+            )
+
+        rendered = output.getvalue()
+        rendered.encode("ascii")
+        for line in rendered.splitlines():
+            self.assertLessEqual(len(line), 72, line)
+
+    def test_short_source_handles_every_url_shape(self):
+        self.assertEqual(
+            _short_source("https://github.com/cline/cline/discussions/1831"),
+            "cline/cline#1831",
+        )
+        self.assertEqual(
+            _short_source("https://github.com/sst/opencode/issues/3444"),
+            "sst/opencode#3444",
+        )
+        self.assertEqual(_short_source(None), "no upstream report")
+        self.assertEqual(
+            _short_source("https://example.com/a/b"),
+            "example.com/a/b",
+        )
+
+    def test_replay_json_format_stays_default(self):
+        output = io.StringIO()
+
+        with redirect_stdout(output):
+            main(["replay", "--policy", str(POLICY), "--scenarios", str(SCENARIOS)])
+
+        self.assertIn('"summary"', output.getvalue())
+        self.assertNotIn("CAUGHT", output.getvalue())
 
     def test_mcp_parser_accepts_web_approval_state(self):
         args = build_parser().parse_args(

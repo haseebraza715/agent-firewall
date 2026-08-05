@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import re
 import sys
 from collections.abc import Sequence
 from pathlib import Path
@@ -10,7 +11,7 @@ from typing import Any
 
 from .dashboard import Dashboard
 from .mcp_proxy import run_mcp_proxy
-from .models import DecisionKind, ToolCall, Usage
+from .models import Decision, DecisionKind, ToolCall, Usage
 from .policy import Policy, PolicyConfigError
 
 EXIT_BY_DECISION = {
@@ -32,6 +33,12 @@ def build_parser() -> argparse.ArgumentParser:
     check.add_argument("--tool", required=True)
     check.add_argument("--arguments", default="{}", help="tool arguments as JSON")
     check.add_argument("--cost", default="0", help="estimated cost in USD")
+    check.add_argument(
+        "--format",
+        choices=("json", "text"),
+        default="json",
+        help="json for machine consumption (default), text for humans",
+    )
 
     replay = commands.add_parser(
         "replay",
@@ -39,6 +46,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     replay.add_argument("--policy", type=Path, required=True)
     replay.add_argument("--scenarios", type=Path, required=True)
+    replay.add_argument(
+        "--format",
+        choices=("json", "text"),
+        default="json",
+        help="json for machine consumption (default), text for humans",
+    )
 
     mcp = commands.add_parser("mcp", help="guard a local MCP stdio server")
     mcp.add_argument("--policy", type=Path, required=True)
@@ -103,7 +116,10 @@ def _check(args: argparse.Namespace) -> int:
     policy = Policy.load(args.policy)
     call = ToolCall.create(args.tool, arguments, args.cost)
     decision = policy.evaluate(call, Usage())
-    print(json.dumps(decision.as_dict(), sort_keys=True))
+    if args.format == "text":
+        print(_format_decision(call.name, decision))
+    else:
+        print(json.dumps(decision.as_dict(), sort_keys=True))
     return EXIT_BY_DECISION[decision.kind]
 
 
@@ -113,19 +129,53 @@ def _replay(args: argparse.Namespace) -> int:
     if not isinstance(scenarios, list):
         raise ValueError("scenario file must contain a JSON list")
 
+    as_text = args.format == "text"
     failures = 0
     for scenario in scenarios:
         result = _run_scenario(policy, scenario)
         failures += int(not result["passed"])
-        print(json.dumps(result, sort_keys=True))
+        if as_text:
+            print(_format_scenario(result))
+        else:
+            print(json.dumps(result, sort_keys=True))
 
     summary = {
         "passed": len(scenarios) - failures,
         "failed": failures,
         "total": len(scenarios),
     }
-    print(json.dumps({"summary": summary}, sort_keys=True))
+    if as_text:
+        print(
+            f"{summary['passed']} caught, {summary['failed']} missed "
+            f"of {summary['total']} scenarios"
+        )
+    else:
+        print(json.dumps({"summary": summary}, sort_keys=True))
     return 1 if failures else 0
+
+
+def _format_decision(tool: str, decision: Decision) -> str:
+    rule = "" if decision.rule_index is None else f" (rule {decision.rule_index})"
+    return f"{decision.kind.value:<16}  {tool}\n{'':18}{decision.reason}{rule}"
+
+
+def _format_scenario(result: dict[str, Any]) -> str:
+    status = "CAUGHT" if result["passed"] else "MISSED"
+    title = result.get("title") or result["id"]
+    trail = ", ".join(result["actual"])
+    source = _short_source(result.get("source_url"))
+    return f"{status}  {title}\n{'':8}{trail}  {source}"
+
+
+def _short_source(url: str | None) -> str:
+    """Shorten a GitHub issue URL to owner/repo#number where possible."""
+    if not url:
+        return "no upstream report"
+    for prefix in ("https://", "http://"):
+        url = url.removeprefix(prefix)
+    url = url.removeprefix("github.com/")
+    match = re.fullmatch(r"([^/]+/[^/]+)/(?:issues|discussions|pull)/(\d+)", url)
+    return f"{match.group(1)}#{match.group(2)}" if match else url
 
 
 def _dashboard(args: argparse.Namespace) -> int:
@@ -178,6 +228,7 @@ def _run_scenario(policy: Policy, scenario: Any) -> dict[str, Any]:
 
     return {
         "id": scenario_id,
+        "title": scenario.get("title"),
         "source_url": scenario.get("source_url"),
         "expected": expected,
         "actual": actual,

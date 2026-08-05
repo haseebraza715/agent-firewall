@@ -9,6 +9,20 @@ for human approval **before the tool executes**.
 This repository contains the first testable MVP. It has no runtime
 dependencies and supports Python 3.9+.
 
+![Agent Firewall terminal demo](docs/demo.gif)
+
+The demo above is a real recording — three decisions, eleven failure scenarios
+replayed against one policy, a guarded Python function, and the audit log.
+Re-record it with `./scripts/record-demo.sh` (requires `expect`, `asciinema`,
+`jq`, and [`agg`](https://github.com/asciinema/agg)); the raw session is in
+[`docs/demo.cast`](docs/demo.cast), which is the source of truth and replayable
+with `asciinema play docs/demo.cast`.
+
+Ten of the eleven replayed scenarios come from public bug reports on other
+projects, listed on the [incident wall](docs/incidents/README.md). Run
+`./scripts/check-sources.sh` to confirm every cited report still resolves
+before publishing anything that shows the replay output.
+
 ## What works today
 
 - Ordered allow, block, and approval rules matched by tool name and arguments
@@ -50,6 +64,16 @@ The example intentionally exits with status `3` because human approval is
 required. Exit codes are `0` for allow, `3` for approval required, `4` for
 block, and `2` for invalid input.
 
+`check` and `replay` both accept `--format text` for a human-readable version
+of the same result. JSON stays the default so existing scripts are unaffected.
+
+```bash
+agent-firewall replay \
+  --policy examples/policy.json \
+  --scenarios examples/complaints.json \
+  --format text
+```
+
 ## Guard a real tool
 
 ```python
@@ -69,12 +93,26 @@ firewall = Firewall.from_policy_file(
     audit_path=Path("firewall-audit.jsonl"),
 )
 
+
 def send_email(to, subject):
     return {"sent": True, "to": to, "subject": subject}
+
 
 safe_send_email = firewall.wrap("email.send", send_email)
 safe_send_email("customer@example.com", "Your receipt")
 ```
+
+A blocked or denied call raises `ToolCallBlocked`, which carries the `call` and
+`decision` that caused it. Catch it — denial is an expected outcome, not a
+crash. See [`examples/wrap_tool.py`](examples/wrap_tool.py).
+
+Positional arguments are bound to the tool's parameter names before the policy
+is evaluated, so a rule keyed on `{"to": "*@mycompany.com"}` matches both
+`send_email("a@mycompany.com", ...)` and `send_email(to="a@mycompany.com", ...)`.
+Tools with no inspectable signature (C builtins, for example) keep their
+positional arguments in an opaque `_args` list, which never matches a rule that
+names an argument, so those calls fall through to the tool-name rules and the
+policy default.
 
 Use `await firewall.acall(...)` or wrap an `async def` tool for asynchronous
 agents.
