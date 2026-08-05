@@ -232,5 +232,85 @@ class AsyncFirewallTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await wrapped(), "ok")
 
 
+def policy_matching_argument(decision):
+    return Policy.from_dict(
+        {
+            "default_decision": "allow",
+            "rules": [
+                {
+                    "tool": "demo.tool",
+                    "arguments": {"url": "http://169.254.169.254*"},
+                    "decision": decision,
+                    "reason": "argument rule",
+                }
+            ],
+        }
+    )
+
+
+class ArgumentBindingTests(unittest.TestCase):
+    """Argument rules must apply however the caller passes the arguments."""
+
+    def test_positional_argument_matches_named_rule(self):
+        firewall = Firewall(policy_matching_argument("block"))
+
+        def navigate(url):
+            return url
+
+        with self.assertRaises(ToolCallBlocked):
+            firewall.call("demo.tool", navigate, "http://169.254.169.254/latest/")
+
+    def test_keyword_argument_matches_named_rule(self):
+        firewall = Firewall(policy_matching_argument("block"))
+
+        def navigate(url):
+            return url
+
+        with self.assertRaises(ToolCallBlocked):
+            firewall.call("demo.tool", navigate, url="http://169.254.169.254/latest/")
+
+    def test_unrelated_positional_argument_still_allowed(self):
+        firewall = Firewall(policy_matching_argument("block"))
+
+        def navigate(url):
+            return url
+
+        self.assertEqual(
+            firewall.call("demo.tool", navigate, "https://example.com"),
+            "https://example.com",
+        )
+
+    def test_var_positional_tool_keeps_opaque_argument_list(self):
+        recorded = []
+        firewall = Firewall(policy_matching_argument("block"))
+
+        def variadic(*parts):
+            recorded.append(parts)
+            return parts
+
+        result = firewall.call("demo.tool", variadic, "http://169.254.169.254/latest/")
+
+        self.assertEqual(recorded, [("http://169.254.169.254/latest/",)])
+        self.assertEqual(result, ("http://169.254.169.254/latest/",))
+
+    def test_builtin_without_signature_does_not_raise(self):
+        firewall = Firewall(policy_matching_argument("block"))
+
+        self.assertEqual(firewall.call("demo.tool", len, [1, 2, 3]), 3)
+
+
+class AsyncArgumentBindingTests(unittest.IsolatedAsyncioTestCase):
+    async def test_async_positional_argument_matches_named_rule(self):
+        firewall = Firewall(policy_matching_argument("block"))
+
+        async def navigate(url):
+            return url
+
+        with self.assertRaises(ToolCallBlocked):
+            await firewall.acall(
+                "demo.tool", navigate, "http://169.254.169.254/latest/"
+            )
+
+
 if __name__ == "__main__":
     unittest.main()

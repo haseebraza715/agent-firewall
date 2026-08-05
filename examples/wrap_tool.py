@@ -1,6 +1,14 @@
+"""Guard a real Python function with Agent Firewall.
+
+The policy in this directory pre-approves company recipients and gates
+everything else on a human decision. A denial is a normal outcome, not a
+crash, so `ToolCallBlocked` is caught and reported.
+"""
+
 from pathlib import Path
 
 from agent_firewall import Firewall
+from agent_firewall.exceptions import ToolCallBlocked
 
 
 def approve(call, decision):
@@ -9,7 +17,7 @@ def approve(call, decision):
 
 
 def send_email(to, subject):
-    print(f"sent {subject!r} to {to}")
+    print(f"  SENT {subject!r} to {to}")
 
 
 firewall = Firewall.from_policy_file(
@@ -19,4 +27,9 @@ firewall = Firewall.from_policy_file(
 )
 safe_send_email = firewall.wrap("email.send", send_email)
 
-safe_send_email("customer@example.com", "Agent Firewall test")
+for recipient in ("teammate@mycompany.com", "customer@example.com"):
+    print(f"agent wants to email {recipient}")
+    try:
+        safe_send_email(recipient, "Agent Firewall test")
+    except ToolCallBlocked as blocked:
+        print(f"  NOT SENT - {blocked.decision.reason}")

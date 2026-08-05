@@ -69,7 +69,7 @@ class Firewall:
     ) -> Any:
         call = ToolCall.create(
             tool_name,
-            _call_arguments(args, kwargs),
+            _call_arguments(tool, args, kwargs),
             estimated_cost_usd,
         )
         return self._execute_sync(call, lambda: tool(*args, **kwargs))
@@ -111,7 +111,7 @@ class Firewall:
     ) -> Any:
         call = ToolCall.create(
             tool_name,
-            _call_arguments(args, kwargs),
+            _call_arguments(tool, args, kwargs),
             estimated_cost_usd,
         )
         return await self._execute_async(call, lambda: tool(*args, **kwargs))
@@ -254,8 +254,35 @@ class Firewall:
             )
 
 
-def _call_arguments(args: Any, kwargs: Any) -> Mapping[str, Any]:
-    arguments = dict(kwargs)
-    if args:
+def _call_arguments(
+    tool: Callable[..., Any],
+    args: Any,
+    kwargs: Any,
+) -> Mapping[str, Any]:
+    """Resolve a call's arguments to parameter names before policy evaluation.
+
+    Positional arguments are bound to their declared parameter names so that
+    argument-matching rules apply no matter how the caller invokes the tool.
+    Tools with no inspectable signature keep the positional list under
+    ``_args``, which never matches a named argument rule.
+    """
+    arguments: dict[str, Any] = dict(kwargs)
+    if not args:
+        return arguments
+    try:
+        bound = inspect.signature(tool).bind_partial(*args, **kwargs)
+    except (TypeError, ValueError):
         arguments["_args"] = list(args)
+        return arguments
+
+    parameters = bound.signature.parameters
+    arguments.clear()
+    for name, value in bound.arguments.items():
+        kind = parameters[name].kind
+        if kind is inspect.Parameter.VAR_POSITIONAL:
+            arguments["_args"] = list(value)
+        elif kind is inspect.Parameter.VAR_KEYWORD:
+            arguments.update(value)
+        else:
+            arguments[name] = value
     return arguments
