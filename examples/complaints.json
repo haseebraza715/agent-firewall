@@ -24,7 +24,7 @@
   },
   {
     "id": "langgraph-6053-missing-approval",
-    "title": "Human-in-the-loop approval is bypassed",
+    "title": "Human-in-the-loop approval never reaches a human",
     "source_url": "https://github.com/langchain-ai/langgraph/issues/6053",
     "calls": [
       {
@@ -45,9 +45,9 @@
     "expected_decisions": ["allow", "block"]
   },
   {
-    "id": "langgraph-1097-tool-loop",
-    "title": "Agent repeats the same tool instead of using its result",
-    "source_url": "https://github.com/langchain-ai/langgraph/discussions/1097",
+    "id": "langchain-26019-tool-loop",
+    "title": "Agent repeats a tool without processing its output",
+    "source_url": "https://github.com/langchain-ai/langchain/issues/26019",
     "calls": [
       {"tool": "search.web", "arguments": {"query": "weather Budapest"}},
       {"tool": "search.web", "arguments": {"query": "weather Budapest"}},
@@ -58,7 +58,7 @@
   {
     "id": "opencode-3444-repeated-actions",
     "title": "Coding agent repeats the same actions indefinitely",
-    "source_url": "https://github.com/sst/opencode/issues/3444",
+    "source_url": "https://github.com/anomalyco/opencode/issues/3444",
     "calls": [
       {"tool": "shell.run", "arguments": {"command": "npm test"}},
       {"tool": "shell.run", "arguments": {"command": "npm test"}},
