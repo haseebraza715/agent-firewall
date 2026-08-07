@@ -1,6 +1,8 @@
 import io
+import sys
+import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
 from agent_firewall import Policy
@@ -204,6 +206,31 @@ class CliTests(unittest.TestCase):
 
         self.assertEqual(args.host, "127.0.0.1")
         self.assertEqual(args.port, 8787)
+
+    def test_storage_failure_exits_with_invalid_input_code(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            policy_path = root / "policy.json"
+            policy_path.write_text('{"default_decision":"block"}', encoding="utf-8")
+            state_path = root / "state-dir"
+            state_path.mkdir()
+            with redirect_stderr(io.StringIO()):
+                status = main(
+                    [
+                        "mcp",
+                        "--policy",
+                        str(policy_path),
+                        "--state",
+                        str(state_path),
+                        "--approve-web",
+                        "--",
+                        sys.executable,
+                        "-c",
+                        "pass",
+                    ]
+                )
+
+            self.assertEqual(status, 2)
 
     def test_scenario_errors_include_call_location(self):
         scenario = {
