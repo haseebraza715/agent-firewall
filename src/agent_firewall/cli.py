@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from .dashboard import Dashboard
+from .exceptions import StorageError
 from .mcp_proxy import run_mcp_proxy
 from .models import Decision, DecisionKind, ToolCall, Usage
 from .policy import Policy, PolicyConfigError
@@ -103,7 +104,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
             )
         return _replay(args)
-    except (OSError, PolicyConfigError, ValueError, json.JSONDecodeError) as exc:
+    except (
+        OSError,
+        PolicyConfigError,
+        StorageError,
+        ValueError,
+        json.JSONDecodeError,
+    ) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
 
