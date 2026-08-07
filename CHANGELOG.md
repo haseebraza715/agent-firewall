@@ -29,7 +29,7 @@
 - Catch `ToolCallBlocked` in `examples/wrap_tool.py` instead of exiting with a
   traceback, and show both a pre-approved and a gated recipient.
 
-## 0.2.0 — 2026-07-06
+## 0.2.0 - 2026-07-06
 
 - Match policy rules against selected tool arguments.
 - Detect repeated identical tool calls using canonical fingerprints.
@@ -38,7 +38,7 @@
 - Persist budgets and approvals in SQLite.
 - Add a loopback-only dashboard with idempotent web approvals.
 
-## 0.1.0 — 2026-07-06
+## 0.1.0 - 2026-07-06
 
 - Add the first framework-neutral policy engine and Python tool wrapper.
 - Enforce call, per-tool, and estimated-cost budgets.
