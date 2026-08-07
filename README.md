@@ -6,7 +6,9 @@
 
 **Decide allow, hold, or block for every agent tool call before it runs.**
 
-![Agent Firewall demo](docs/demo.gif)
+<video controls autoplay muted loop playsinline width="100%" src="https://github.com/haseebraza715/agent-firewall/raw/main/docs/demo.mp4"></video>
+
+Prefer a GIF? [docs/demo.gif](docs/demo.gif)
 
 ## Try it in 60 seconds
 
