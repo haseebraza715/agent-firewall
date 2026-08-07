@@ -244,6 +244,17 @@ class CliTests(unittest.TestCase):
             r"bad-case: calls\[0\]: tool name must be a non-empty string",
         ):
             _run_scenario(Policy.from_dict({}), scenario)
+        scenario = {
+            "id": "bad-case",
+            "calls": [{"tool": ""}],
+            "expected_decisions": ["block"],
+        }
+
+        with self.assertRaisesRegex(
+            ValueError,
+            r"bad-case: calls\[0\]: tool name must be a non-empty string",
+        ):
+            _run_scenario(Policy.from_dict({}), scenario)
 
 
 if __name__ == "__main__":
