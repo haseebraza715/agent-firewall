@@ -121,6 +121,28 @@ class PolicyTests(unittest.TestCase):
                 }
             )
 
+    def test_unknown_top_level_keys_are_rejected(self):
+        with self.assertRaisesRegex(PolicyConfigError, "default_decisionz"):
+            Policy.from_dict({"default_decisionz": "block"})
+
+    def test_unknown_rule_keys_are_rejected(self):
+        with self.assertRaisesRegex(PolicyConfigError, r"rules\[0\]\.argument"):
+            Policy.from_dict(
+                {
+                    "rules": [
+                        {
+                            "tool": "email.send",
+                            "argument": {"to": "anyone@example.com"},
+                            "decision": "allow",
+                        }
+                    ]
+                }
+            )
+
+    def test_unknown_budget_keys_are_rejected(self):
+        with self.assertRaisesRegex(PolicyConfigError, r"budget\.max_calss"):
+            Policy.from_dict({"budget": {"max_calss": 3}})
+
     def test_argument_auditing_defaults_to_none(self):
         policy = Policy.from_dict({})
 
