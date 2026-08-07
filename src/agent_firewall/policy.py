@@ -54,6 +54,7 @@ class Policy:
     def from_dict(cls, raw: Mapping[str, Any]) -> Policy:
         if not isinstance(raw, dict):
             raise PolicyConfigError("policy must be a JSON object")
+        _reject_unknown(raw, ("default_decision", "budget", "rules", "audit_arguments"))
 
         default = _decision(raw.get("default_decision", "block"), "default_decision")
         budget = _budget(raw.get("budget", {}))
@@ -66,6 +67,11 @@ class Policy:
         for index, item in enumerate(rules_raw):
             if not isinstance(item, dict):
                 raise PolicyConfigError(f"rules[{index}] must be an object")
+            _reject_unknown(
+                item,
+                ("tool", "decision", "reason", "arguments"),
+                f"rules[{index}]",
+            )
             tool = item.get("tool")
             if not isinstance(tool, str) or not tool.strip():
                 raise PolicyConfigError(
@@ -175,6 +181,11 @@ def _audit_mode(value: Any) -> ArgumentAuditMode:
 def _budget(raw: Any) -> Budget:
     if not isinstance(raw, dict):
         raise PolicyConfigError("budget must be an object")
+    _reject_unknown(
+        raw,
+        ("max_calls", "max_calls_per_tool", "max_identical_calls", "max_cost_usd"),
+        "budget",
+    )
     return Budget(
         max_calls=_positive_int(raw.get("max_calls"), "budget.max_calls"),
         max_calls_per_tool=_positive_int(
@@ -193,6 +204,17 @@ def _positive_int(value: Any, field: str) -> int | None:
     if isinstance(value, bool) or not isinstance(value, int) or value < 1:
         raise PolicyConfigError(f"{field} must be a positive integer")
     return int(value)
+
+
+def _reject_unknown(
+    raw: Mapping[str, Any],
+    allowed: tuple[str, ...],
+    where: str = "policy",
+) -> None:
+    unknown = [key for key in raw if key not in allowed]
+    if unknown:
+        names = ", ".join(f"{where}.{key}" for key in sorted(unknown))
+        raise PolicyConfigError(f"unknown policy key(s): {names}")
 
 
 def _optional_money(value: Any, field: str) -> Decimal | None:
