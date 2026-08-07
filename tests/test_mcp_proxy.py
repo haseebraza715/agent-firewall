@@ -11,10 +11,11 @@ from agent_firewall import SQLiteApprovalQueue
 
 ROOT = Path(__file__).resolve().parents[1]
 FAKE_SERVER = ROOT / "tests" / "fixtures" / "fake_mcp_server.py"
+TOLERANT_SERVER = ROOT / "tests" / "fixtures" / "tolerant_mcp_server.py"
 
 
 class McpProxyTests(unittest.TestCase):
-    def run_proxy(self, policy, messages):
+    def run_proxy(self, policy, messages, server=FAKE_SERVER):
         with tempfile.TemporaryDirectory() as directory:
             policy_path = Path(directory) / "policy.json"
             policy_path.write_text(json.dumps(policy), encoding="utf-8")
@@ -30,7 +31,7 @@ class McpProxyTests(unittest.TestCase):
                     str(policy_path),
                     "--",
                     sys.executable,
-                    str(FAKE_SERVER),
+                    str(server),
                 ],
                 cwd=ROOT,
                 env=env,
@@ -221,6 +222,132 @@ class McpProxyTests(unittest.TestCase):
             responses[0]["error"]["data"]["decision"],
             "require_approval",
         )
+
+    def test_tools_call_with_null_arguments_is_policed(self):
+        responses = self.run_proxy(
+            {
+                "default_decision": "block",
+                "rules": [{"tool": "email.send", "decision": "require_approval"}],
+            },
+            [
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "tools/call",
+                    "params": {"name": "email.send", "arguments": None},
+                }
+            ],
+            server=TOLERANT_SERVER,
+        )
+
+        self.assertEqual(responses[0]["error"]["code"], -32001)
+        self.assertEqual(
+            responses[0]["error"]["data"]["decision"],
+            "require_approval",
+        )
+
+    def test_tools_call_with_non_object_arguments_is_policed(self):
+        responses = self.run_proxy(
+            {
+                "default_decision": "block",
+                "rules": [{"tool": "email.send", "decision": "require_approval"}],
+            },
+            [
+                {
+                    "jsonrpc": "2.0",
+                    "id": 2,
+                    "method": "tools/call",
+                    "params": {"name": "email.send", "arguments": ["arg"]},
+                }
+            ],
+            server=TOLERANT_SERVER,
+        )
+
+        self.assertEqual(responses[0]["error"]["code"], -32001)
+        self.assertEqual(
+            responses[0]["error"]["data"]["decision"],
+            "require_approval",
+        )
+
+    def test_tools_call_with_null_arguments_allowed_by_name_rule_runs(self):
+        responses = self.run_proxy(
+            {
+                "default_decision": "block",
+                "rules": [{"tool": "database.query", "decision": "allow"}],
+            },
+            [
+                {
+                    "jsonrpc": "2.0",
+                    "id": 4,
+                    "method": "tools/call",
+                    "params": {"name": "database.query", "arguments": None},
+                }
+            ],
+            server=TOLERANT_SERVER,
+        )
+
+        self.assertIn("result", responses[0])
+        self.assertIn("EXECUTED", responses[0]["result"]["content"][0]["text"])
+
+    def test_tools_call_with_non_object_params_is_rejected(self):
+        responses = self.run_proxy(
+            {"default_decision": "block"},
+            [
+                {
+                    "jsonrpc": "2.0",
+                    "id": 5,
+                    "method": "tools/call",
+                    "params": None,
+                }
+            ],
+            server=TOLERANT_SERVER,
+        )
+
+        self.assertEqual(responses[0]["error"]["code"], -32602)
+        self.assertNotIn("EXECUTED", json.dumps(responses))
+
+    def test_tools_call_without_or_empty_name_is_rejected(self):
+        responses = self.run_proxy(
+            {"default_decision": "allow"},
+            [
+                {
+                    "jsonrpc": "2.0",
+                    "id": 6,
+                    "method": "tools/call",
+                    "params": {},
+                },
+                {
+                    "jsonrpc": "2.0",
+                    "id": 7,
+                    "method": "tools/call",
+                    "params": {"name": "", "arguments": {}},
+                },
+            ],
+            server=TOLERANT_SERVER,
+        )
+
+        by_id = {response["id"]: response for response in responses}
+        self.assertEqual(by_id[6]["error"]["code"], -32602)
+        self.assertEqual(by_id[7]["error"]["code"], -32602)
+        self.assertNotIn("EXECUTED", json.dumps(responses))
+
+    def test_null_arguments_notification_is_dropped_not_forwarded(self):
+        responses = self.run_proxy(
+            {
+                "default_decision": "block",
+                "rules": [{"tool": "email.send", "decision": "require_approval"}],
+            },
+            [
+                {
+                    "jsonrpc": "2.0",
+                    "method": "tools/call",
+                    "params": {"name": "email.send", "arguments": None},
+                }
+            ],
+            server=TOLERANT_SERVER,
+        )
+
+        self.assertEqual(responses, [])
 
     def test_web_approval_unblocks_waiting_tool_call(self):
         with tempfile.TemporaryDirectory() as directory:
