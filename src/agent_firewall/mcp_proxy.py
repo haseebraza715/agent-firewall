@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import sys
 from collections.abc import Mapping, Sequence
@@ -16,6 +17,22 @@ from .models import Decision, ToolCall
 POLICY_ERROR = -32001
 DUPLICATE_ID_ERROR = -32600
 INVALID_PARAMS_ERROR = -32602
+
+
+def _is_batch(line: bytes) -> bool:
+    """Return True when the line parses as a JSON-RPC batch (a JSON array).
+
+    Batches can smuggle ``tools/call`` messages past the per-line policy
+    check, so they are never forwarded.
+    """
+    stripped = line.lstrip()
+    if not stripped.startswith(b"["):
+        return False
+    try:
+        value = json.loads(line)
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return False
+    return isinstance(value, list)
 
 
 class TerminalApprover:
@@ -80,6 +97,9 @@ class McpStdioProxy:
     async def _handle_client_line(self, line: bytes) -> None:
         message = decode_message(line)
         if message is None:
+            if _is_batch(line):
+                self._reject_batch(line)
+                return
             await self._write_child(line)
             return
 
@@ -145,6 +165,32 @@ class McpStdioProxy:
                 "error": {"code": INVALID_PARAMS_ERROR, "message": text},
             }
         )
+
+    def _reject_batch(self, line: bytes) -> None:
+        """Answer every batch element that carries an id; never forward it."""
+        try:
+            batch = json.loads(line)
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return
+        if not isinstance(batch, list):
+            return
+        errors = [
+            {
+                "jsonrpc": "2.0",
+                "id": item["id"],
+                "error": {
+                    "code": -32600,
+                    "message": "batch requests are not supported",
+                },
+            }
+            for item in batch
+            if isinstance(item, dict) and "id" in item
+        ]
+        if errors:
+            payload = (
+                json.dumps(errors, separators=(",", ":"), ensure_ascii=False) + "\n"
+            ).encode("utf-8")
+            self._write_client_bytes(payload)
 
     async def _passthrough_client_message(
         self,
