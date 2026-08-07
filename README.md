@@ -1,53 +1,64 @@
 # Agent Firewall
 
 [![CI](https://github.com/haseebraza715/agent-firewall/actions/workflows/ci.yml/badge.svg)](https://github.com/haseebraza715/agent-firewall/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue.svg)](pyproject.toml)
 
-Agent Firewall is a small, framework-neutral runtime guard for AI-agent tool
-calls. It decides whether a proposed call should be allowed, blocked, or held
-for human approval **before the tool executes**.
+**The guard that decides allow, hold, or block for every agent tool call before it runs.**
 
-This repository contains the first testable MVP. It has no runtime
-dependencies and supports Python 3.9+.
+![Agent Firewall demo](docs/demo.gif)
 
-![Agent Firewall terminal demo](docs/demo.gif)
+## Try it in 60 seconds
 
-The demo above is a real recording — three decisions, eleven failure scenarios
-replayed against one policy, a guarded Python function, and the audit log.
-Re-record it with `./scripts/record-demo.sh` (requires `expect`, `asciinema`,
-`jq`, and [`agg`](https://github.com/asciinema/agg)); the raw session is in
-[`docs/demo.cast`](docs/demo.cast), which is the source of truth and replayable
-with `asciinema play docs/demo.cast`.
+```bash
+git clone https://github.com/haseebraza715/agent-firewall.git
+cd agent-firewall
+python3 -m venv .venv && source .venv/bin/activate && pip install .
+./scripts/demo.sh
+```
 
-Ten of the eleven replayed scenarios come from public bug reports on other
-projects, listed on the [incident wall](docs/incidents/README.md). Run
-`./scripts/check-sources.sh` to confirm every cited report still resolves
-before publishing anything that shows the replay output.
+What you'll see:
 
-## What works today
+- Three tool calls get three JSON verdicts — `allow`, `require_approval`, `block` — with the matching rule and exit code.
+- Eleven incidents replayed against one small policy — ten from real public bug reports (LangGraph, LangChain, Cline, VS Code, Hermes, MCP servers) — every one stopped or gated.
+- A guarded `send_email` executes for the safe recipient and raises `ToolCallBlocked` for the external one, with every decision in an append-only audit log.
 
-- Ordered allow, block, and approval rules matched by tool name and arguments
-- Per-run call and estimated-cost caps
-- Per-tool and identical-call repetition caps for runaway loops
-- Synchronous and asynchronous tool wrappers
-- Human approval callbacks
-- Thread-safe budget reservation
-- Argument-free JSONL audit logs
-- CLI checks and complaint-derived scenario replay
-- Transparent MCP stdio proxy with terminal approval
-- Persistent local budgets and approvals in SQLite
-- Loopback-only dashboard with web approval
+The demo is fully offline and self-contained: no network, no pip, no runtime dependencies.
+
+## What it does
+
+- **Ordered policy rules** — `allow` / `require_approval` / `block`, matched by tool name and arguments; first match wins, default is block.
+- **Budgets and caps** — per-run call and estimated-cost limits, plus per-tool and identical-call repetition caps that catch runaway loops.
+- **Sync and async wrappers** — `Firewall.wrap()` and `await firewall.acall(...)` guard any callable; positional arguments are bound to parameter names before the policy is evaluated.
+- **Human approval** — your own callback, or terminal and browser prompts.
+- **MCP stdio proxy** — sits in front of any local MCP server; blocked calls get a JSON-RPC policy error.
+- **SQLite state** — persistent call, cost, and repetition counts across restarts.
+- **Loopback dashboard** — approve or deny pending calls in the browser on a localhost URL.
+- **Audit log** — argument-free JSONL records of every decision; fail-closed writes.
+
+## How it works
+
+Each proposed call is matched against the ordered policy — rules can match the tool name, the bound arguments, or both. The first match (or the default) produces the decision, budget capacity is reserved before anything can run, and the outcome is written to the audit log. Denial is fail-closed: no rule, no budget, no execution.
+
+## Quick facts
+
+| | |
+|---|---|
+| Language | Python 3.9+ |
+| Runtime dependencies | zero (stdlib only) |
+| Offline | yes — everything runs locally |
+| Interfaces | CLI, Python API, MCP stdio proxy, browser dashboard |
+| License | MIT |
 
 ## Quick start
+
+Install and evaluate a tool call without executing it:
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install .
-```
 
-Evaluate a proposed tool call without executing it:
-
-```bash
 agent-firewall check \
   --policy examples/policy.json \
   --tool email.send \
@@ -60,19 +71,7 @@ The output is machine-readable:
 {"code": "rule_match", "decision": "require_approval", "reason": "outbound email requires a human decision", "rule_index": 2}
 ```
 
-The example intentionally exits with status `3` because human approval is
-required. Exit codes are `0` for allow, `3` for approval required, `4` for
-block, and `2` for invalid input.
-
-`check` and `replay` both accept `--format text` for a human-readable version
-of the same result. JSON stays the default so existing scripts are unaffected.
-
-```bash
-agent-firewall replay \
-  --policy examples/policy.json \
-  --scenarios examples/complaints.json \
-  --format text
-```
+Exit codes are `0` for allow, `3` for approval required, `4` for block, and `2` for invalid input. Pass `--format text` to `check` or `replay` for a human-readable version; JSON stays the default.
 
 ## Guard a real tool
 
@@ -83,8 +82,7 @@ from agent_firewall import Firewall
 
 
 def ask_human(call, decision):
-    answer = input(f"Approve {call.name}? [y/N] ")
-    return answer.lower() == "y"
+    return input(f"Approve {call.name}? [y/N] ").lower() == "y"
 
 
 firewall = Firewall.from_policy_file(
@@ -102,25 +100,11 @@ safe_send_email = firewall.wrap("email.send", send_email)
 safe_send_email("customer@example.com", "Your receipt")
 ```
 
-A blocked or denied call raises `ToolCallBlocked`, which carries the `call` and
-`decision` that caused it. Catch it — denial is an expected outcome, not a
-crash. See [`examples/wrap_tool.py`](examples/wrap_tool.py).
+A denied call raises `ToolCallBlocked`, which carries the call and decision — denial is an expected outcome, not a crash. See [`examples/wrap_tool.py`](examples/wrap_tool.py) for the full example.
 
-Positional arguments are bound to the tool's parameter names before the policy
-is evaluated, so a rule keyed on `{"to": "*@mycompany.com"}` matches both
-`send_email("a@mycompany.com", ...)` and `send_email(to="a@mycompany.com", ...)`.
-Tools with no inspectable signature (C builtins, for example) keep their
-positional arguments in an opaque `_args` list, which never matches a rule that
-names an argument, so those calls fall through to the tool-name rules and the
-policy default.
+## Guard a local MCP server
 
-Use `await firewall.acall(...)` or wrap an `async def` tool for asynchronous
-agents.
-
-## Guard any local MCP server
-
-No agent code changes are required. Put the firewall in front of the existing
-stdio server command:
+Put the firewall in front of any stdio server — no agent changes:
 
 ```bash
 agent-firewall mcp \
@@ -130,7 +114,7 @@ agent-firewall mcp \
   -- python path/to/your_mcp_server.py
 ```
 
-Use the same command and arguments in the MCP client configuration:
+Use the same command in the MCP client configuration:
 
 ```json
 {
@@ -146,35 +130,14 @@ Use the same command and arguments in the MCP client configuration:
 }
 ```
 
-The proxy forwards newline-delimited JSON-RPC unchanged except for
-`tools/call`. Blocked calls receive a JSON-RPC policy error. Approval rules
-prompt on the proxy's controlling terminal; without `--approve-terminal`, they
-fail closed.
+The proxy forwards newline-delimited JSON-RPC unchanged except `tools/call`, which is always policed: missing, null, or non-object arguments are rejected or evaluated without arguments, never passed through, and JSON-RPC batch frames are rejected instead of forwarded. Blocked calls receive a JSON-RPC policy error; approval rules prompt on the proxy's terminal and fail closed otherwise.
 
-For persistent budgets and browser approval, start the dashboard:
+For persistent budgets and browser approval, start the dashboard and point the proxy at the same state:
 
 ```bash
-agent-firewall dashboard \
-  --policy examples/policy.json \
-  --audit firewall-audit.jsonl \
-  --state firewall.db
+agent-firewall dashboard --policy examples/policy.json --audit firewall-audit.jsonl --state firewall.db
+agent-firewall mcp --policy examples/policy.json --audit firewall-audit.jsonl --state firewall.db --approve-web -- python path/to/your_mcp_server.py
 ```
-
-Then run the proxy with the same state and audit files:
-
-```bash
-agent-firewall mcp \
-  --policy examples/policy.json \
-  --audit firewall-audit.jsonl \
-  --state firewall.db \
-  --approve-web \
-  -- python path/to/your_mcp_server.py
-```
-
-Open the loopback URL printed by the dashboard. Calls awaiting approval appear
-without their arguments; approve or deny them in the browser. Decisions are
-idempotent, and an approval rechecks the budget before execution. SQLite keeps
-call, cost, per-tool, and identical-call counts across process restarts.
 
 ## Policy format
 
@@ -191,78 +154,21 @@ Policies are JSON and fail closed by default:
     "max_cost_usd": "0.50"
   },
   "rules": [
-    {
-      "tool": "database.query",
-      "decision": "allow",
-      "reason": "read-only query"
-    },
-    {
-      "tool": "email.*",
-      "arguments": {"to": "*@mycompany.com"},
-      "decision": "allow",
-      "reason": "company recipient"
-    },
-    {
-      "tool": "email.*",
-      "decision": "require_approval",
-      "reason": "external side effect"
-    }
+    {"tool": "database.query", "decision": "allow", "reason": "read-only query"},
+    {"tool": "email.*", "arguments": {"to": "*@mycompany.com"}, "decision": "allow", "reason": "company recipient"},
+    {"tool": "email.*", "decision": "require_approval", "reason": "external side effect"}
   ]
 }
 ```
 
-Rules are evaluated in order and the first match wins. Tool names and string
-argument values use shell globs. Non-string argument values use exact matching;
-a missing argument does not match.
+Rules run in order; the first match wins. Tool names and string arguments use shell globs; non-string values match exactly; a missing argument never matches. Unknown keys at any level are rejected at load time, so a typo cannot silently widen enforcement. Cost enforcement uses the caller-supplied estimate — token-cost calculation is outside this MVP. Argument auditing defaults to `none`; use `hash`, `redacted`, or `full` depending on how much you trust the audit destination.
 
-Cost enforcement uses the estimate supplied by the caller. Agent Firewall does
-not calculate provider token costs in this MVP.
+## Replay real incidents
 
-Argument auditing defaults to `none`. Use `hash` to compare calls without
-logging values, `redacted` to retain only argument shape, or `full` only when
-the audit destination is trusted.
-
-Audit persistence is fail-closed: if the JSONL destination cannot be created
-or appended, the guarded call raises `AuditWriteError` instead of executing
-without a security record. SQLite initialization and state failures raise
-`StorageError` with the affected path while retaining the original database
-exception as the cause.
-
-## Replay real complaints
-
-The included corpus models ten public reports plus one synthetic cost-cap
-check. The [Agent Incident Wall](docs/incidents/README.md) maps every public
-report to the smallest deterministic policy that would have stopped or paused
-the action.
-
-Examples include:
-
-- [LangGraph database-query loop #6731](https://github.com/langchain-ai/langgraph/issues/6731)
-- [LangChain repeated side-effecting tool call #16712](https://github.com/langchain-ai/langchain/issues/16712)
-- [LangGraph human-approval bypass #6053](https://github.com/langchain-ai/langgraph/issues/6053)
-- [Cline destructive restore #1213](https://github.com/cline/cline/issues/1213)
-- [MCP browser SSRF advisory #3662](https://github.com/modelcontextprotocol/servers/issues/3662)
-
-Run them with:
+The corpus models eleven failure scenarios — ten from public bug reports on other projects (LangGraph, LangChain, Cline, VS Code, Hermes, and the MCP servers) plus one synthetic spend-cap check — and one small policy stops or gates all eleven. The [Agent Incident Wall](docs/incidents/README.md) maps every report to the smallest deterministic rule that would have caught it, and `./scripts/check-sources.sh` re-verifies every citation still resolves.
 
 ```bash
-agent-firewall replay \
-  --policy examples/policy.json \
-  --scenarios examples/complaints.json
-```
-
-To test a new complaint, add a scenario with proposed calls and expected
-decisions:
-
-```json
-{
-  "id": "source-123",
-  "source_url": "https://example.com/issue/123",
-  "calls": [
-    {"tool": "database.query", "estimated_cost_usd": "0.10"}
-  ],
-  "expected_decisions": ["allow"]
-}
+agent-firewall replay --policy examples/policy.json --scenarios examples/complaints.json
 ```
 
 ## Test
@@ -273,15 +179,10 @@ PYTHONPATH=src python -m unittest discover -s tests -v
 
 ## MVP boundaries
 
-This release does not provide semantic prompt-injection detection or
-multi-host distributed budgets. Both need a threat model and real usage data
-before they can be implemented honestly.
+No semantic prompt-injection detection, no multi-host distributed budgets — both need a threat model and real usage data before they can be implemented honestly.
 
 ## Security posture
 
-Agent Firewall is an enforcement point, not a sandbox. Tool implementations
-still need least-privilege credentials and operating-system isolation. Audit
-logs omit tool arguments by design because they commonly contain secrets or
-personal data.
+Agent Firewall is an enforcement point, not a sandbox. Tool implementations still need least-privilege credentials and operating-system isolation. Audit logs omit tool arguments by design because they commonly contain secrets or personal data.
 
 MIT licensed.
