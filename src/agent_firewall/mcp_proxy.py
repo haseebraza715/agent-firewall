@@ -15,6 +15,7 @@ from .models import Decision, ToolCall
 
 POLICY_ERROR = -32001
 DUPLICATE_ID_ERROR = -32600
+INVALID_PARAMS_ERROR = -32602
 
 
 class TerminalApprover:
@@ -86,15 +87,20 @@ class McpStdioProxy:
             await self._passthrough_client_message(message, line)
             return
 
+        # A tools/call must always pass through the policy. Never forward it
+        # raw: a missing, null, or non-object params/name/arguments shape is a
+        # protocol violation, but a lenient wrapped server may still execute
+        # the tool, so every variant is evaluated (with no arguments) or
+        # rejected instead of being passed through.
         params = message.get("params")
-        if not isinstance(params, dict):
-            await self._passthrough_client_message(message, line)
+        tool_name = params.get("name") if isinstance(params, dict) else None
+        if not isinstance(tool_name, str) or not tool_name.strip():
+            self._reject(message, "tools/call requires a string tool name")
             return
-        tool_name = params.get("name")
+        assert isinstance(params, dict)
         arguments = params.get("arguments", {})
-        if not isinstance(tool_name, str) or not isinstance(arguments, dict):
-            await self._passthrough_client_message(message, line)
-            return
+        if not isinstance(arguments, dict):
+            arguments = {}
 
         async def forward() -> Mapping[str, Any] | None:
             if "id" not in message:
@@ -122,9 +128,23 @@ class McpStdioProxy:
                     }
                 )
             return
+        except Exception:
+            self._reject(message, "internal firewall error; call not executed")
+            return
 
         if response is not None:
             self._write_client(response)
+
+    def _reject(self, message: Mapping[str, Any], text: str) -> None:
+        if "id" not in message:
+            return
+        self._write_client(
+            {
+                "jsonrpc": "2.0",
+                "id": message["id"],
+                "error": {"code": INVALID_PARAMS_ERROR, "message": text},
+            }
+        )
 
     async def _passthrough_client_message(
         self,
