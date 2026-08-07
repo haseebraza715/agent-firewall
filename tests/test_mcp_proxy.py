@@ -349,6 +349,32 @@ class McpProxyTests(unittest.TestCase):
 
         self.assertEqual(responses, [])
 
+    def test_jsonrpc_batch_is_rejected_not_forwarded(self):
+        responses = self.run_proxy(
+            {"default_decision": "block"},
+            [
+                [
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 10,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "email.send",
+                            "arguments": {"to": "anyone@example.com"},
+                        },
+                    }
+                ]
+            ],
+            server=TOLERANT_SERVER,
+        )
+
+        self.assertNotIn("EXECUTED", json.dumps(responses))
+        self.assertEqual(len(responses), 1)
+        batch = responses[0]
+        self.assertIsInstance(batch, list)
+        self.assertEqual(batch[0]["error"]["code"], -32600)
+        self.assertEqual(batch[0]["id"], 10)
+
     def test_web_approval_unblocks_waiting_tool_call(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
