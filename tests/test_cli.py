@@ -257,5 +257,143 @@ class CliTests(unittest.TestCase):
             _run_scenario(Policy.from_dict({}), scenario)
 
 
+class PolicyCommandTests(unittest.TestCase):
+    def test_lint_clean_policy_exits_zero(self):
+        output = io.StringIO()
+        with redirect_stdout(output):
+            status = main(["policy", "lint", "--policy", str(POLICY)])
+
+        self.assertEqual(status, 0)
+        self.assertIn("no findings", output.getvalue())
+
+    def test_lint_error_policy_exits_nonzero_with_text(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "policy.json"
+            path.write_text('{"default_decision": "allow"}', encoding="utf-8")
+            output = io.StringIO()
+            with redirect_stdout(output):
+                status = main(["policy", "lint", "--policy", str(path)])
+
+        self.assertEqual(status, 1)
+        self.assertIn("permissive_default", output.getvalue())
+        self.assertIn("error", output.getvalue())
+
+    def test_lint_json_format(self):
+        output = io.StringIO()
+        with redirect_stdout(output):
+            status = main(
+                ["policy", "lint", "--policy", str(POLICY), "--format", "json"]
+            )
+
+        self.assertEqual(status, 0)
+        self.assertIn('"error_count": 0', output.getvalue())
+
+    def test_lint_unreadable_policy_exits_with_invalid_input_code(self):
+        with tempfile.TemporaryDirectory() as directory:
+            missing = Path(directory) / "missing.json"
+            with redirect_stderr(io.StringIO()):
+                status = main(["policy", "lint", "--policy", str(missing)])
+
+        self.assertEqual(status, 2)
+
+    def test_explain_defaults_to_text_and_uses_decision_exit_code(self):
+        output = io.StringIO()
+        with redirect_stdout(output):
+            status = main(
+                [
+                    "policy",
+                    "explain",
+                    "--policy",
+                    str(POLICY),
+                    "--tool",
+                    "email.send",
+                    "--arguments",
+                    '{"to": "customer@example.com"}',
+                ]
+            )
+
+        rendered = output.getvalue()
+        self.assertEqual(status, 3)
+        self.assertIn("policy explain: email.send", rendered)
+        self.assertIn("budget:", rendered)
+        self.assertIn("decision: require_approval (rule 2)", rendered)
+
+    def test_explain_json_output(self):
+        output = io.StringIO()
+        with redirect_stdout(output):
+            status = main(
+                [
+                    "policy",
+                    "explain",
+                    "--policy",
+                    str(POLICY),
+                    "--tool",
+                    "unknown.tool",
+                    "--format",
+                    "json",
+                ]
+            )
+
+        self.assertEqual(status, 4)
+        self.assertIn('"decision": "block"', output.getvalue())
+        self.assertIn('"budget"', output.getvalue())
+        self.assertIn('"rules"', output.getvalue())
+
+
+class DoctorCommandTests(unittest.TestCase):
+    def test_doctor_clean_policy_exits_zero(self):
+        output = io.StringIO()
+        with redirect_stdout(output):
+            status = main(["doctor", "--policy", str(POLICY)])
+
+        self.assertEqual(status, 0)
+        self.assertIn("all 6 check(s) passed", output.getvalue())
+        self.assertIn("version: ok", output.getvalue())
+
+    def test_doctor_permissive_policy_exits_nonzero(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "policy.json"
+            path.write_text('{"default_decision": "allow"}', encoding="utf-8")
+            output = io.StringIO()
+            with redirect_stdout(output):
+                status = main(["doctor", "--policy", str(path)])
+
+        self.assertEqual(status, 1)
+        self.assertIn("fail_closed_unknown_tool: FAIL", output.getvalue())
+
+    def test_doctor_json_output(self):
+        output = io.StringIO()
+        with redirect_stdout(output):
+            status = main(["doctor", "--policy", str(POLICY), "--format", "json"])
+
+        self.assertEqual(status, 0)
+        self.assertIn('"all_ok": true', output.getvalue())
+
+
+class VersionTests(unittest.TestCase):
+    def test_version_flag_prints_version(self):
+        output = io.StringIO()
+        with self.assertRaises(SystemExit) as caught, redirect_stdout(output):
+            main(["--version"])
+
+        self.assertEqual(caught.exception.code, 0)
+        self.assertEqual(output.getvalue().strip(), "0.3.0")
+
+    def test_package_version_matches_pyproject(self):
+        import re
+
+        import agent_firewall
+
+        text = (Path(ROOT) / "pyproject.toml").read_text(encoding="utf-8")
+        match = re.search(r'^version = "([^"]+)"', text, flags=re.MULTILINE)
+        self.assertIsNotNone(match)
+        self.assertEqual(agent_firewall.__version__, match.group(1))
+
+    def test_version_is_3_0_0(self):
+        import agent_firewall
+
+        self.assertEqual(agent_firewall.__version__, "0.3.0")
+
+
 if __name__ == "__main__":
     unittest.main()
