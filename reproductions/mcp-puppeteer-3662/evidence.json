@@ -1,0 +1,47 @@
+{
+  "affected_package": "@modelcontextprotocol/server-puppeteer@0.6.2",
+  "guarded": {
+    "approval_call": {
+      "decision": "require_approval",
+      "endpoint_hits": 0,
+      "executed": false,
+      "jsonrpc_error_code": -32001
+    },
+    "prohibited_call": {
+      "decision": "block",
+      "endpoint_hits": 0,
+      "executed": false,
+      "jsonrpc_error_code": -32001
+    },
+    "repetition_budget": {
+      "first_call_executed": true,
+      "hits_after_first": 1,
+      "hits_after_second": 1,
+      "second_call_decision_code": "max_identical_calls",
+      "second_call_jsonrpc_error_code": -32001
+    },
+    "safe_call": {
+      "endpoint_hits": 1,
+      "executed": true
+    }
+  },
+  "input_sha256": {
+    "package_lock": "72024d4798eada3f89538e70e8f2301e749dcc6f98cadcbb7f647b61b3cf9817",
+    "policy": "4318cf16fab8becff3817608165268e7b10e6591d3c5df278fd6c2ae33093caa"
+  },
+  "kind": "safe-end-to-end-integration",
+  "passed": true,
+  "request": {
+    "tool": "puppeteer_navigate",
+    "url": "http://127.0.0.1:<ephemeral>/latest/meta-data/"
+  },
+  "safety": "loopback fixture only; no cloud metadata or external target contacted",
+  "schema_version": 1,
+  "source_issue": "https://github.com/modelcontextprotocol/servers/issues/3662",
+  "unguarded": {
+    "endpoint_hits": 1,
+    "executed": true
+  },
+  "upstream_commit": "9be4674d1ddf8c469e6461a27a337eeb65f76c2e",
+  "upstream_repository": "https://github.com/modelcontextprotocol/servers-archived"
+}

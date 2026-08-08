@@ -1,0 +1,49 @@
+{
+  "default_decision": "block",
+  "budget": {
+    "max_calls": 10,
+    "max_calls_per_tool": 10,
+    "max_identical_calls": 1
+  },
+  "rules": [
+    {
+      "tool": "puppeteer_navigate",
+      "arguments": {
+        "url": {
+          "operator": "url",
+          "scheme": "http",
+          "hostname": "127.0.0.1",
+          "path": {"equals": "/safe"}
+        }
+      },
+      "decision": "allow",
+      "reason": "the local integration fixture's safe path is allowed"
+    },
+    {
+      "tool": "puppeteer_navigate",
+      "arguments": {
+        "url": {
+          "operator": "url",
+          "scheme": "http",
+          "hostname": "127.0.0.1",
+          "path": {"equals": "/approval"}
+        }
+      },
+      "decision": "require_approval",
+      "reason": "this integration path represents a consequential navigation"
+    },
+    {
+      "tool": "puppeteer_navigate",
+      "arguments": {
+        "url": {
+          "operator": "url",
+          "scheme": "http",
+          "hostname": "127.0.0.1",
+          "path": {"equals": "/repeat"}
+        }
+      },
+      "decision": "allow",
+      "reason": "the first call to the repetition fixture is allowed"
+    }
+  ]
+}

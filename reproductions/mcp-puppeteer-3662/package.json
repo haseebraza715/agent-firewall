@@ -1,0 +1,8 @@
+{
+  "name": "agent-firewall-mcp-puppeteer-3662-reproduction",
+  "private": true,
+  "version": "1.0.0",
+  "dependencies": {
+    "@modelcontextprotocol/server-puppeteer": "0.6.2"
+  }
+}
