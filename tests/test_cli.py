@@ -369,6 +369,19 @@ class DoctorCommandTests(unittest.TestCase):
         self.assertEqual(status, 0)
         self.assertIn('"all_ok": true', output.getvalue())
 
+    def test_request_timeout_accepts_positive_float(self):
+        args = build_parser().parse_args(
+            ["mcp", "--policy", "p", "--request-timeout", "1.5", "--", "echo"]
+        )
+        self.assertEqual(args.request_timeout, 1.5)
+
+    def test_request_timeout_must_be_positive(self):
+        with self.assertRaises(SystemExit) as raised:
+            build_parser().parse_args(
+                ["mcp", "--policy", "p", "--request-timeout", "0", "--", "echo"]
+            )
+        self.assertEqual(raised.exception.code, 2)
+
 
 class VersionTests(unittest.TestCase):
     def test_version_flag_prints_version(self):
