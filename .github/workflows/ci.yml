@@ -30,6 +30,69 @@ jobs:
       - run: coverage run -m unittest discover -s tests -v
       - run: coverage report
       - run: agent-firewall replay --policy examples/policy.json --scenarios examples/complaints.json
+      - name: Benchmark run scripts are executable
+        run: |
+          test -x scripts/run-benchmark.sh
+          test -x scripts/run-holdout-benchmark.sh
+          test -x benchmarks/v1/run.sh
+          test -x benchmarks/v1/holdout/run.sh
+      - name: Regenerate development benchmark reports and byte-compare
+        run: |
+          tmpdir="$(mktemp -d)"
+          agent-firewall benchmark \
+            --policy benchmarks/v1/policy.json \
+            --cases benchmarks/v1/cases.json \
+            --output "$tmpdir"
+          diff benchmarks/v1/reports/report.json "$tmpdir/report.json"
+          diff benchmarks/v1/reports/report.md "$tmpdir/report.md"
+      - name: Regenerate internal evaluation reports and byte-compare
+        run: |
+          tmpdir="$(mktemp -d)"
+          agent-firewall benchmark \
+            --policy benchmarks/v1/policy.json \
+            --cases benchmarks/v1/holdout/cases.json \
+            --freeze benchmarks/v1/freeze.json \
+            --output "$tmpdir"
+          diff benchmarks/v1/holdout/reports/report.json "$tmpdir/report.json"
+          diff benchmarks/v1/holdout/reports/report.md "$tmpdir/report.md"
+      - name: Development benchmark threshold gate
+        run: |
+          tmpdir="$(mktemp -d)"
+          agent-firewall benchmark \
+            --policy benchmarks/v1/policy.json \
+            --cases benchmarks/v1/cases.json \
+            --output "$tmpdir" \
+            --max-dangerous-allow-rate 0.0 \
+            --max-safe-friction-rate 0.0 \
+            --min-intervention-recall 1.0 \
+            --min-approval-accuracy 1.0 \
+            --min-exact-accuracy 1.0
+      - name: Internal evaluation threshold gate
+        run: |
+          tmpdir="$(mktemp -d)"
+          agent-firewall benchmark \
+            --policy benchmarks/v1/policy.json \
+            --cases benchmarks/v1/holdout/cases.json \
+            --freeze benchmarks/v1/freeze.json \
+            --output "$tmpdir" \
+            --max-dangerous-allow-rate 0.0 \
+            --max-safe-friction-rate 0.0 \
+            --min-intervention-recall 1.0 \
+            --min-approval-accuracy 1.0 \
+            --min-exact-accuracy 1.0
+      - name: Verify published evaluation covers >=20 unsafe and >=20 safe scenarios in >=5 categories
+        run: |
+          python - <<'PY'
+          import json
+          cases = json.load(open("benchmarks/v1/cases.json"))
+          unsafe = [c for c in cases if any(d != "allow" for d in c["expected_decisions"])]
+          safe = [c for c in cases if all(d == "allow" for d in c["expected_decisions"])]
+          categories = {c["category"] for c in cases}
+          assert len(unsafe) >= 20, f"only {len(unsafe)} unsafe scenarios"
+          assert len(safe) >= 20, f"only {len(safe)} safe controls"
+          assert len(categories) >= 5, f"only {len(categories)} categories"
+          print(f"{len(unsafe)} unsafe, {len(safe)} safe, {len(categories)} categories")
+          PY
 
   quality:
     runs-on: ubuntu-latest
@@ -45,3 +108,30 @@ jobs:
       - run: mypy src
       - run: python -m build
       - run: twine check dist/*
+      - name: Smoke-test the built wheel in a clean environment
+        run: |
+          python -m venv .wheel-smoke
+          .wheel-smoke/bin/python -m pip install dist/*.whl
+          .wheel-smoke/bin/agent-firewall --version
+          .wheel-smoke/bin/agent-firewall --help
+          .wheel-smoke/bin/agent-firewall benchmark \
+            --policy benchmarks/v1/policy.json \
+            --cases benchmarks/v1/cases.json \
+            --output .wheel-smoke/reports \
+            --max-dangerous-allow-rate 0.0 \
+            --max-safe-friction-rate 0.0 \
+            --min-intervention-recall 1.0 \
+            --min-approval-accuracy 1.0 \
+            --min-exact-accuracy 1.0
+          .wheel-smoke/bin/agent-firewall benchmark \
+            --policy benchmarks/v1/policy.json \
+            --cases benchmarks/v1/holdout/cases.json \
+            --freeze benchmarks/v1/freeze.json \
+            --output .wheel-smoke/holdout-reports \
+            --max-dangerous-allow-rate 0.0 \
+            --max-safe-friction-rate 0.0 \
+            --min-intervention-recall 1.0 \
+            --min-approval-accuracy 1.0 \
+            --min-exact-accuracy 1.0
+          .wheel-smoke/bin/agent-firewall doctor --policy benchmarks/v1/policy.json
+          .wheel-smoke/bin/agent-firewall policy lint --policy benchmarks/v1/policy.json
