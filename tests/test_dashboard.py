@@ -137,7 +137,7 @@ class DashboardTests(unittest.TestCase):
         self.assertIn("Agent Firewall", page)
         self.assertIn("default-src 'none'", policy)
         self.assertEqual(response.headers["X-Frame-Options"], "DENY")
-        self.assertTrue(server.startswith("AgentFirewall/0.2.0"))
+        self.assertTrue(server.startswith("AgentFirewall/0.3.0"))
 
     def test_foreign_host_header_is_rejected(self):
         request = Request(

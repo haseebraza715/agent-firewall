@@ -97,6 +97,18 @@ class ApprovalQueueTests(unittest.TestCase):
         self.assertNotIn("arguments", record)
         self.assertNotIn("not-stored", str(record))
 
+    def test_wait_auto_denies_after_timeout(self):
+        queue = SQLiteApprovalQueue(
+            self.path,
+            timeout_seconds=0.05,
+            poll_seconds=0.01,
+        )
+
+        decided = queue.wait(self.call, self.decision)
+
+        self.assertFalse(decided)
+        self.assertEqual(queue.get(self.call.id).status, "denied")
+
     def test_async_approver_interface(self):
         async def exercise():
             task = asyncio.create_task(self.queue(self.call, self.decision))

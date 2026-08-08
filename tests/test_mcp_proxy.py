@@ -375,6 +375,49 @@ class McpProxyTests(unittest.TestCase):
         self.assertEqual(batch[0]["error"]["code"], -32600)
         self.assertEqual(batch[0]["id"], 10)
 
+    def test_child_server_failure_fails_pending_call_closed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            policy_path = Path(directory) / "policy.json"
+            policy_path.write_text('{"default_decision": "allow"}', encoding="utf-8")
+            env = dict(os.environ)
+            env["PYTHONPATH"] = str(ROOT / "src")
+            # The wrapped server reads one line, then exits without answering.
+            child = (
+                "import sys; line = sys.stdin.readline(); sys.exit(1) if line else None"
+            )
+            process = subprocess.Popen(
+                [
+                    sys.executable,
+                    "-m",
+                    "agent_firewall",
+                    "mcp",
+                    "--policy",
+                    str(policy_path),
+                    "--",
+                    sys.executable,
+                    "-c",
+                    child,
+                ],
+                cwd=ROOT,
+                env=env,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            request = {
+                "jsonrpc": "2.0",
+                "id": 7,
+                "method": "tools/call",
+                "params": {"name": "anything"},
+            }
+            stdout, stderr = process.communicate(json.dumps(request) + "\n", timeout=5)
+
+        response = json.loads(stdout.splitlines()[0])
+        self.assertEqual(response["id"], 7)
+        self.assertIn("error", response)
+        self.assertEqual(response["error"]["code"], -32602)
+
     def test_web_approval_unblocks_waiting_tool_call(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
