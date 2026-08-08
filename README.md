@@ -29,10 +29,10 @@ The demo runs offline after checkout. The package has zero runtime dependencies.
 
 - **Ordered policy rules:** `allow` / `require_approval` / `block`, matched by tool name and arguments; first match wins, default is block.
 - **Typed argument matchers:** validate URL hosts, filesystem paths, email domains, HTTP methods, numeric ranges, SQL operations, and command argv against structured patterns — not string globs. See [docs/ARGUMENT_MATCHERS.md](docs/ARGUMENT_MATCHERS.md).
-- **Budgets and caps:** per-run call and cost limits, plus per-tool and identical-call repetition caps that catch runaway loops.
+- **Budgets and caps:** per-run call and cost limits, plus per-tool and identical-call repetition caps that catch runaway loops. Over MCP, a client-supplied cost in `params._meta.estimated_cost_usd` feeds the cost budget; absent means zero.
 - **Sync and async guards:** `Firewall.wrap()` and `await firewall.acall(...)`; arguments are bound to parameter names before the policy runs.
 - **Human approval:** your own callback, or terminal and browser prompts.
-- **MCP stdio proxy:** sits in front of any local MCP server; blocked calls get a JSON-RPC policy error.
+- **MCP stdio proxy:** sits in front of any local MCP server; blocked calls get a JSON-RPC policy error and are never forwarded, while a forwarded call whose server stalls times out fail-closed via `--request-timeout`.
 - **SQLite state and audit log:** persistent counters across restarts, argument-free JSONL records, fail-closed writes.
 
 ## How it works
@@ -73,8 +73,15 @@ Guard a local MCP server (same command goes in your client's MCP config):
 
 ```bash
 agent-firewall mcp --policy examples/policy.json --audit firewall-audit.jsonl \
-  --approve-terminal -- python path/to/your_mcp_server.py
+  --approve-terminal --request-timeout 60 -- python path/to/your_mcp_server.py
 ```
+
+The proxy forwards ordinary MCP metadata unchanged, reads an optional
+`params._meta.estimated_cost_usd` per call into the cost budget, and fails a
+call closed when the wrapped server stalls past `--request-timeout` (default
+300s, error code `-32002`). A response stall affects only that request. A stdin
+write stall terminates the child to protect JSONL framing; concurrent and later
+requests then receive child-unavailable error `-32003`.
 
 Policies are JSON, fail closed by default, and reject unknown keys at load time so a typo cannot widen enforcement. See [`examples/policy.json`](examples/policy.json).
 

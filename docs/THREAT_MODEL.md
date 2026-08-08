@@ -10,9 +10,17 @@ and cannot prove.
 Agent Firewall is an in-process enforcement point around tool calls and a
 stdio proxy in front of a local MCP child server. It sees the tool name and
 the arguments after positional arguments are resolved to parameter names,
-plus a per-call estimated cost. It decides `allow`, `require_approval`, or
-`block` before the underlying tool runs. When an audit path is configured,
-decided outcomes are appended to a JSONL audit log.
+plus a per-call estimated cost. Over the MCP proxy, a client-supplied cost in
+`params._meta.estimated_cost_usd` is read and validated, so cost budgets
+enforce before a call is forwarded; an absent cost means zero. It decides
+`allow`, `require_approval`, or `block` before the underlying tool runs. When
+an audit path is configured, decided outcomes are appended to a JSONL audit
+log.
+
+MCP cost metadata is an unverified client assertion. A client can omit
+`params._meta.estimated_cost_usd`, which the proxy treats as zero; deployments
+that require authoritative cost enforcement must derive cost before this
+boundary rather than trusting the caller.
 
 Decisions come from the ordered policy engine (`src/agent_firewall/policy.py`):
 rules matched by tool name and arguments, budgets and repetition caps, and a
@@ -80,6 +88,10 @@ Agent Firewall is an enforcement point, not a sandbox. Specifically it does
 | Audit write failure | explicit `AuditWriteError`; the call is not treated as executed | `audit.py` | `tests/test_audit_failures.py::AuditFailureTests::test_audit_write_failure_is_explicit_and_fail_closed` |
 | State read/write failure | explicit `StorageError`; no reservation is made and execution is refused | `state.py` | `tests/test_state.py::SQLiteStateStoreTests::test_corrupt_database_has_targeted_error`, `tests/test_cli.py::CliTests::test_storage_failure_exits_with_invalid_input_code` |
 | Child MCP server exits before responding | the pending request fails closed with an error instead of hanging | `mcp_proxy.py` (`_read_child`) | `tests/test_mcp_proxy.py::McpProxyTests::test_child_server_failure_fails_pending_call_closed` |
+| Child MCP server stalls without responding | the request times out after `--request-timeout` seconds and is answered with a fail-closed JSON-RPC error (`-32002`); the eventual late response is discarded and the proxy stays alive | `mcp_proxy.py` (`_forward_request`, `_read_child`) | `tests/test_mcp_proxy.py::McpProxyTests::test_request_timeout_fails_call_closed`, `test_late_response_after_timeout_is_discarded_and_proxy_stays_alive` |
+| Child MCP server stops reading stdin | request and notification writes time out after `--request-timeout`; the child is terminated and awaited (then killed if needed) to prevent a cancelled partial write from corrupting JSONL framing; concurrent and later requests receive child-unavailable error `-32003` | `mcp_proxy.py` (`_write_child_with_timeout`, `_abort_child`) | `tests/test_mcp_proxy.py::McpProxyTests::test_request_timeout_covers_child_write_and_audits_failed`, `test_passthrough_notification_timeout_aborts_child`, `test_tool_notification_timeout_is_audited_failed`, `test_real_stalled_write_terminates_child_and_marks_session_unavailable` |
+| Malformed `params._meta.estimated_cost_usd` | the call is rejected with a JSON-RPC params error and never forwarded or executed | `mcp_proxy.py` (`_extract_cost`) | `tests/test_mcp_proxy.py::McpProxyTests::test_invalid_cost_is_rejected_and_not_forwarded`, `test_invalid_cost_notification_is_dropped_not_forwarded` |
+| A `params._meta.estimated_cost_usd` that exceeds a cost budget | blocked by `max_cost_usd` before the child is reached; other `_meta` keys are still forwarded unchanged | `mcp_proxy.py` (`_extract_cost`), `policy.py` | `tests/test_mcp_proxy.py::McpProxyTests::test_cost_budget_blocks_without_reaching_child`, `test_meta_with_cost_and_other_keys_is_forwarded_unchanged` |
 | Direct calls outside the proxy | not covered: they never enter the enforcement boundary | n/a | `tests/test_firewall.py::ArgumentBindingTests` documents the in-process call contract the boundary depends on |
 
 The failure matrix is not a substitute for a security review of the embedding
