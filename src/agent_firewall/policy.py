@@ -8,6 +8,7 @@ from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import Any
 
+from . import matchers
 from .models import ArgumentAuditMode, Decision, DecisionKind, ToolCall, Usage, money
 
 
@@ -85,6 +86,13 @@ class Policy:
             arguments = item.get("arguments", {})
             if not isinstance(arguments, dict):
                 raise PolicyConfigError(f"rules[{index}].arguments must be an object")
+            for key, pattern in arguments.items():
+                if matchers.is_typed(pattern):
+                    where = f"rules[{index}].arguments.{key}"
+                    try:
+                        matchers.compile(pattern, where)
+                    except ValueError as exc:
+                        raise PolicyConfigError(str(exc)) from exc
             rules.append(
                 Rule(
                     tool=tool,
@@ -103,14 +111,12 @@ class Policy:
         )
 
     def evaluate(self, call: ToolCall, usage: Usage) -> Decision:
-        budget_decision = self._check_budget(call, usage)
+        budget_decision = self.budget_decision(call, usage)
         if budget_decision is not None:
             return budget_decision
 
         for index, rule in enumerate(self.rules):
-            if fnmatchcase(call.name, rule.tool) and _arguments_match(
-                call.arguments, rule.arguments
-            ):
+            if rule_matches(rule, call):
                 return Decision(
                     kind=rule.decision,
                     reason=rule.reason,
@@ -124,7 +130,7 @@ class Policy:
             code="default",
         )
 
-    def _check_budget(self, call: ToolCall, usage: Usage) -> Decision | None:
+    def budget_decision(self, call: ToolCall, usage: Usage) -> Decision | None:
         if self.budget.max_calls is not None:
             if usage.tool_calls >= self.budget.max_calls:
                 return Decision(
@@ -226,6 +232,18 @@ def _optional_money(value: Any, field: str) -> Decimal | None:
         raise PolicyConfigError(f"{field}: {exc}") from exc
 
 
+def rule_tool_matches(rule: Rule, call: ToolCall) -> bool:
+    return fnmatchcase(call.name, rule.tool)
+
+
+def rule_arguments_match(rule: Rule, call: ToolCall) -> bool:
+    return _arguments_match(call.arguments, rule.arguments)
+
+
+def rule_matches(rule: Rule, call: ToolCall) -> bool:
+    return rule_tool_matches(rule, call) and rule_arguments_match(rule, call)
+
+
 def _arguments_match(
     actual: Mapping[str, Any],
     expected: Mapping[str, Any],
@@ -234,7 +252,10 @@ def _arguments_match(
         if key not in actual:
             return False
         value = actual[key]
-        if isinstance(pattern, str):
+        if matchers.is_typed(pattern):
+            if not matchers.match(pattern, value):
+                return False
+        elif isinstance(pattern, str):
             if not isinstance(value, str) or not fnmatchcase(value, pattern):
                 return False
         elif value != pattern:

@@ -244,5 +244,127 @@ class PolicyTests(unittest.TestCase):
         self.assertEqual(policy.default_decision, DecisionKind.ALLOW)
 
 
+class TypedMatcherPolicyTests(unittest.TestCase):
+    def _policy(self, rule):
+        return Policy.from_dict({"default_decision": "block", "rules": [rule]})
+
+    def test_typed_url_matcher_runs_through_policy_evaluate(self):
+        policy = self._policy(
+            {
+                "tool": "url.fetch",
+                "arguments": {
+                    "url": {
+                        "operator": "url",
+                        "scheme": "https",
+                        "hostname": "example.com",
+                    }
+                },
+                "decision": "allow",
+            }
+        )
+
+        allowed = policy.evaluate(
+            ToolCall.create("url.fetch", {"url": "https://example.com/a"}),
+            Usage(),
+        )
+        blocked = policy.evaluate(
+            ToolCall.create("url.fetch", {"url": "https://evil.com/a"}),
+            Usage(),
+        )
+
+        self.assertEqual(allowed.kind, DecisionKind.ALLOW)
+        self.assertEqual(blocked.kind, DecisionKind.BLOCK)
+
+    def test_typed_command_matcher_and_old_glob_coexist(self):
+        policy = Policy.from_dict(
+            {
+                "default_decision": "block",
+                "rules": [
+                    {
+                        "tool": "shell.run",
+                        "arguments": {
+                            "command": {"operator": "command", "executable": "git"}
+                        },
+                        "decision": "allow",
+                    },
+                    {
+                        "tool": "email.send",
+                        "arguments": {"to": "*@mycompany.com"},
+                        "decision": "allow",
+                    },
+                ],
+            }
+        )
+
+        git = policy.evaluate(
+            ToolCall.create("shell.run", {"command": "git status"}),
+            Usage(),
+        )
+        internal = policy.evaluate(
+            ToolCall.create("email.send", {"to": "a@mycompany.com"}),
+            Usage(),
+        )
+
+        self.assertEqual(git.kind, DecisionKind.ALLOW)
+        self.assertEqual(internal.kind, DecisionKind.ALLOW)
+
+    def test_unknown_typed_operator_fails_load(self):
+        with self.assertRaisesRegex(PolicyConfigError, "unknown matcher operator"):
+            Policy.from_dict(
+                {
+                    "rules": [
+                        {
+                            "tool": "a",
+                            "arguments": {"x": {"operator": "bogus"}},
+                            "decision": "allow",
+                        }
+                    ]
+                }
+            )
+
+    def test_unknown_typed_key_fails_load(self):
+        with self.assertRaisesRegex(
+            PolicyConfigError, "unknown typed matcher key\\(s\\)"
+        ):
+            Policy.from_dict(
+                {
+                    "rules": [
+                        {
+                            "tool": "a",
+                            "arguments": {"x": {"operator": "url", "bogus": 1}},
+                            "decision": "allow",
+                        }
+                    ]
+                }
+            )
+
+    def test_invalid_typed_field_fails_load(self):
+        with self.assertRaisesRegex(PolicyConfigError, "port"):
+            Policy.from_dict(
+                {
+                    "rules": [
+                        {
+                            "tool": "a",
+                            "arguments": {"x": {"operator": "url", "port": -1}},
+                            "decision": "allow",
+                        }
+                    ]
+                }
+            )
+
+    def test_missing_rule_argument_does_not_match_typed_pattern(self):
+        policy = self._policy(
+            {
+                "tool": "url.fetch",
+                "arguments": {"url": {"operator": "url", "hostname": "example.com"}},
+                "decision": "allow",
+            }
+        )
+
+        decision = policy.evaluate(ToolCall.create("url.fetch"), Usage())
+
+        self.assertEqual(decision.kind, DecisionKind.BLOCK)
+
+
 if __name__ == "__main__":
     unittest.main()
