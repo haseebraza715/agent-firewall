@@ -3,8 +3,10 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import secrets
 import sys
 from collections.abc import Mapping, Sequence
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -12,11 +14,21 @@ from .approvals import SQLiteApprovalQueue
 from .exceptions import FirewallError
 from .firewall import Approver, Firewall
 from .jsonrpc import decode_message, encode_message, request_key
-from .models import Decision, ToolCall
+from .models import Decision, ToolCall, money
 
 POLICY_ERROR = -32001
 DUPLICATE_ID_ERROR = -32600
 INVALID_PARAMS_ERROR = -32602
+REQUEST_TIMEOUT_ERROR = -32002
+CHILD_UNAVAILABLE_ERROR = -32003
+
+
+class McpRequestTimeoutError(TimeoutError):
+    """The wrapped MCP server did not complete an exchange before its deadline."""
+
+
+class McpChildUnavailableError(RuntimeError):
+    """The wrapped MCP server exited or was terminated after a stalled write."""
 
 
 def _is_batch(line: bytes) -> bool:
@@ -56,16 +68,31 @@ class TerminalApprover:
 
 
 class McpStdioProxy:
-    def __init__(self, firewall: Firewall, command: Sequence[str]) -> None:
+    def __init__(
+        self,
+        firewall: Firewall,
+        command: Sequence[str],
+        request_timeout: float = 300,
+    ) -> None:
         if command and command[0] == "--":
             command = command[1:]
         if not command:
             raise ValueError("MCP server command is required after --")
+        if request_timeout <= 0:
+            raise ValueError("request timeout must be positive")
         self.firewall = firewall
         self.command = list(command)
+        self.request_timeout = request_timeout
         self.process: asyncio.subprocess.Process | None = None
         self.pending: dict[str, asyncio.Future[Mapping[str, Any]]] = {}
-        self.write_lock = asyncio.Lock()
+        self._client_pending: set[str] = set()
+        self._request_sequence = 0
+        self._internal_id_prefix = f"agent-firewall:{secrets.token_hex(16)}:"
+        self._child_failure: str | None = None
+        # Construct lazily inside the running loop. Python 3.9 binds asyncio
+        # primitives at construction time, and callers may build the proxy
+        # before entering asyncio.run().
+        self.write_lock: asyncio.Lock | None = None
 
     async def run(self) -> int:
         self.process = await asyncio.create_subprocess_exec(
@@ -100,7 +127,10 @@ class McpStdioProxy:
             if _is_batch(line):
                 self._reject_batch(line)
                 return
-            await self._write_child(line)
+            try:
+                await self._write_child_with_timeout(line)
+            except (McpRequestTimeoutError, McpChildUnavailableError):
+                pass
             return
 
         if message.get("method") != "tools/call":
@@ -121,10 +151,24 @@ class McpStdioProxy:
         arguments = params.get("arguments", {})
         if not isinstance(arguments, dict):
             arguments = {}
+        try:
+            estimated_cost_usd = _extract_cost(params.get("_meta"))
+        except ValueError:
+            self._reject(
+                message,
+                "params._meta.estimated_cost_usd must be a non-negative finite number",
+            )
+            return
+
+        client_key: str | None = None
+        if "id" in message:
+            client_key = self._claim_client_id(message)
+            if client_key is None:
+                return
 
         async def forward() -> Mapping[str, Any] | None:
             if "id" not in message:
-                await self._write_child(line)
+                await self._write_child_with_timeout(line)
                 return None
             return await self._forward_request(message)
 
@@ -133,6 +177,7 @@ class McpStdioProxy:
                 tool_name,
                 arguments,
                 forward,
+                estimated_cost_usd=estimated_cost_usd,
             )
         except FirewallError as exc:
             if "id" in message:
@@ -148,9 +193,20 @@ class McpStdioProxy:
                     }
                 )
             return
+        except McpRequestTimeoutError:
+            if "id" in message:
+                self._write_client(self._timeout_response(message["id"]))
+            return
+        except McpChildUnavailableError:
+            if "id" in message:
+                self._write_client(self._child_unavailable_response(message["id"]))
+            return
         except Exception:
             self._reject(message, "internal firewall error; call not executed")
             return
+        finally:
+            if client_key is not None:
+                self._client_pending.discard(client_key)
 
         if response is not None:
             self._write_client(response)
@@ -198,34 +254,104 @@ class McpStdioProxy:
         line: bytes,
     ) -> None:
         if "method" in message and "id" in message:
-            response = await self._forward_request(message)
-            self._write_client(response)
+            client_key = self._claim_client_id(message)
+            if client_key is None:
+                return
+            try:
+                response = await self._forward_request(message)
+                self._write_client(response)
+            except McpRequestTimeoutError:
+                self._write_client(self._timeout_response(message["id"]))
+            except McpChildUnavailableError:
+                self._write_client(self._child_unavailable_response(message["id"]))
+            finally:
+                self._client_pending.discard(client_key)
         else:
-            await self._write_child(line)
+            try:
+                await self._write_child_with_timeout(line)
+            except (McpRequestTimeoutError, McpChildUnavailableError):
+                pass
+
+    def _claim_client_id(self, message: Mapping[str, Any]) -> str | None:
+        """Atomically claim an id before policy reservation or child forwarding."""
+        client_key = request_key(message["id"])
+        if client_key in self._client_pending:
+            self._write_client(
+                {
+                    "jsonrpc": "2.0",
+                    "id": message["id"],
+                    "error": {
+                        "code": DUPLICATE_ID_ERROR,
+                        "message": "Duplicate in-flight JSON-RPC id",
+                    },
+                }
+            )
+            return None
+        # No await occurs between the membership test and insertion, making
+        # this claim atomic within the proxy's asyncio event loop.
+        self._client_pending.add(client_key)
+        return client_key
 
     async def _forward_request(
         self,
         message: Mapping[str, Any],
     ) -> Mapping[str, Any]:
-        key = request_key(message["id"])
-        if key in self.pending:
-            return {
-                "jsonrpc": "2.0",
-                "id": message["id"],
-                "error": {
-                    "code": DUPLICATE_ID_ERROR,
-                    "message": "Duplicate in-flight JSON-RPC id",
-                },
-            }
+        if self._child_failure is not None:
+            raise McpChildUnavailableError(self._child_failure)
+        self._request_sequence += 1
+        internal_id = f"{self._internal_id_prefix}{self._request_sequence}"
+        internal_key = request_key(internal_id)
+        child_message = dict(message)
+        child_message["id"] = internal_id
         future: asyncio.Future[Mapping[str, Any]] = (
             asyncio.get_running_loop().create_future()
         )
-        self.pending[key] = future
+        self.pending[internal_key] = future
         try:
-            await self._write_child(encode_message(message))
-            return await future
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + self.request_timeout
+            try:
+                await asyncio.wait_for(
+                    self._write_child(encode_message(child_message)),
+                    timeout=self.request_timeout,
+                )
+            except asyncio.TimeoutError as exc:
+                await self._abort_child()
+                raise McpRequestTimeoutError from exc
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                raise McpRequestTimeoutError
+            try:
+                response = await asyncio.wait_for(
+                    asyncio.shield(future), timeout=remaining
+                )
+            except asyncio.TimeoutError as exc:
+                raise McpRequestTimeoutError from exc
+            return {**response, "id": message["id"]}
         finally:
-            self.pending.pop(key, None)
+            self.pending.pop(internal_key, None)
+
+    @staticmethod
+    def _timeout_response(request_id: Any) -> Mapping[str, Any]:
+        return {
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "error": {
+                "code": REQUEST_TIMEOUT_ERROR,
+                "message": "timed out waiting for wrapped MCP server",
+            },
+        }
+
+    @staticmethod
+    def _child_unavailable_response(request_id: Any) -> Mapping[str, Any]:
+        return {
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "error": {
+                "code": CHILD_UNAVAILABLE_ERROR,
+                "message": "wrapped MCP server is unavailable after a stalled write",
+            },
+        }
 
     async def _read_child(self) -> None:
         assert self.process is not None
@@ -239,13 +365,23 @@ class McpStdioProxy:
                 if message is None or "method" in message or "id" not in message:
                     self._write_client_bytes(line)
                     continue
-                future = self.pending.get(request_key(message["id"]))
-                if future is None or future.done():
-                    self._write_client_bytes(line)
-                else:
+                key = request_key(message["id"])
+                future = self.pending.get(key)
+                if future is not None and not future.done():
                     future.set_result(message)
+                elif isinstance(message["id"], str) and message["id"].startswith(
+                    self._internal_id_prefix
+                ):
+                    # Every proxied request uses a unique child-facing id. A
+                    # response for one with no pending future is necessarily
+                    # late and must not escape to the client.
+                    continue
+                else:
+                    self._write_client_bytes(line)
         finally:
-            error = RuntimeError("wrapped MCP server exited before responding")
+            error = McpChildUnavailableError(
+                self._child_failure or "wrapped MCP server exited before responding"
+            )
             for future in self.pending.values():
                 if not future.done():
                     future.set_exception(error)
@@ -253,9 +389,48 @@ class McpStdioProxy:
     async def _write_child(self, line: bytes) -> None:
         assert self.process is not None
         assert self.process.stdin is not None
+        if self.write_lock is None:
+            self.write_lock = asyncio.Lock()
         async with self.write_lock:
             self.process.stdin.write(line)
             await self.process.stdin.drain()
+
+    async def _write_child_with_timeout(self, line: bytes) -> None:
+        if self._child_failure is not None:
+            raise McpChildUnavailableError(self._child_failure)
+        try:
+            await asyncio.wait_for(
+                self._write_child(line), timeout=self.request_timeout
+            )
+        except asyncio.TimeoutError as exc:
+            await self._abort_child()
+            raise McpRequestTimeoutError from exc
+
+    async def _abort_child(self) -> None:
+        """Stop a stalled child so a cancelled drain cannot corrupt framing."""
+        self._child_failure = (
+            "wrapped MCP server terminated after a stalled stdin write"
+        )
+        if self.process is None:
+            return
+        child_stdin = self.process.stdin
+        if child_stdin is not None:
+            child_stdin.close()
+        if self.process.returncode is None:
+            try:
+                self.process.terminate()
+            except ProcessLookupError:
+                return
+            try:
+                await asyncio.wait_for(self.process.wait(), timeout=1.0)
+            except asyncio.TimeoutError:
+                self.process.kill()
+                await self.process.wait()
+        if child_stdin is not None:
+            try:
+                await child_stdin.wait_closed()
+            except (BrokenPipeError, ConnectionResetError):
+                pass
 
     @staticmethod
     def _write_client(message: Mapping[str, Any]) -> None:
@@ -275,6 +450,7 @@ async def run_mcp_proxy(
     approve_terminal: bool = False,
     approve_web: bool = False,
     approval_timeout: float = 300,
+    request_timeout: float = 300,
 ) -> int:
     if approve_terminal and approve_web:
         raise ValueError("choose either terminal or web approval")
@@ -297,4 +473,22 @@ async def run_mcp_proxy(
         audit_path=audit_path,
         state_path=state_path,
     )
-    return await McpStdioProxy(firewall, command).run()
+    return await McpStdioProxy(
+        firewall,
+        command,
+        request_timeout=request_timeout,
+    ).run()
+
+
+def _extract_cost(meta: Any) -> Decimal:
+    """Read the optional per-call cost from ``params._meta``.
+
+    An absent ``_meta``, a non-dict ``_meta``, or a ``_meta`` without an
+    ``estimated_cost_usd`` key all mean zero cost. A present value must be a
+    non-negative finite decimal; anything else raises ``ValueError`` so the
+    caller can reject the call fail-closed instead of executing it with an
+    ambiguous cost.
+    """
+    if not isinstance(meta, dict) or "estimated_cost_usd" not in meta:
+        return Decimal("0")
+    return money(meta["estimated_cost_usd"])
