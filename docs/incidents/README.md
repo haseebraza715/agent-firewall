@@ -3,6 +3,10 @@
 Each entry links a public report to the smallest deterministic policy that
 would have stopped or paused the risky action.
 
+The demo replays eleven reconstructed incident scenarios; the ten below are
+the ones based on public reports, and the eleventh (a synthetic projected-cost
+cap scenario) is not part of this wall.
+
 | Incident | Runtime control |
 |---|---|
 | [LangGraph query loop](langgraph-6731.md) | identical-call cap |

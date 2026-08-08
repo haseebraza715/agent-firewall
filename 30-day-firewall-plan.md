@@ -2,7 +2,7 @@
 
 > **Historical planning document.** This pre-v0.2 build plan is retained for
 > context; it is not the current product status. See the
-> [README](README.md#what-works-today) for shipped behavior and
+> [README](README.md#what-it-does) for shipped behavior and
 > [CHANGELOG](CHANGELOG.md) for release history.
 
 **Goal:** Ship one real open-source product people actually use, become interview-ready for big tech + EU AI engineer roles, and have 3+ interview processes in flight by Day 30.

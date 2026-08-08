@@ -6,9 +6,7 @@
 
 **Decide allow, hold, or block for every agent tool call before it runs.**
 
-<video controls autoplay muted loop playsinline width="100%" src="https://github.com/haseebraza715/agent-firewall/raw/main/docs/demo.mp4"></video>
-
-Prefer a GIF? [docs/demo.gif](docs/demo.gif)
+![Agent Firewall demo](docs/demo.gif)
 
 ## Try it in 60 seconds
 
@@ -22,14 +20,15 @@ python3 -m venv .venv && source .venv/bin/activate && pip install .
 What you'll see:
 
 - Three tool calls, three JSON verdicts: `allow`, `require_approval`, `block`, with the matching rule and exit code.
-- Eleven incidents replayed against one small policy (ten from real public bug reports), every one stopped or gated.
+- Eleven reconstructed incident scenarios replayed against one small policy (ten based on public bug reports, one synthetic), every one stopped or gated.
 - A guarded `send_email` raises `ToolCallBlocked` for the risky recipient, with every decision in an append-only audit log.
 
-Fully offline and self-contained: no network, no pip, no runtime dependencies.
+The demo runs offline after checkout. The package has zero runtime dependencies.
 
 ## What it does
 
 - **Ordered policy rules:** `allow` / `require_approval` / `block`, matched by tool name and arguments; first match wins, default is block.
+- **Typed argument matchers:** validate URL hosts, filesystem paths, email domains, HTTP methods, numeric ranges, SQL operations, and command argv against structured patterns — not string globs. See [docs/ARGUMENT_MATCHERS.md](docs/ARGUMENT_MATCHERS.md).
 - **Budgets and caps:** per-run call and cost limits, plus per-tool and identical-call repetition caps that catch runaway loops.
 - **Sync and async guards:** `Firewall.wrap()` and `await firewall.acall(...)`; arguments are bound to parameter names before the policy runs.
 - **Human approval:** your own callback, or terminal and browser prompts.
@@ -79,22 +78,100 @@ agent-firewall mcp --policy examples/policy.json --audit firewall-audit.jsonl \
 
 Policies are JSON, fail closed by default, and reject unknown keys at load time so a typo cannot widen enforcement. See [`examples/policy.json`](examples/policy.json).
 
-## Replay real incidents
+## Replay reconstructed incident scenarios
 
-Eleven failure scenarios (ten from public bug reports on other projects), and one small policy stops or gates all of them:
+Eleven reconstructed incident scenarios (ten based on public bug reports on other projects, one synthetic) replayed against one small policy:
 
 ```bash
 agent-firewall replay --policy examples/policy.json --scenarios examples/complaints.json
 ```
 
-The [Agent Incident Wall](docs/incidents/README.md) maps every report to the rule that would have caught it.
+All eleven stop or gate, but treat that 11/11 as selected replay coverage of scenarios we reconstructed, not a held-out safety benchmark. The [Agent Incident Wall](docs/incidents/README.md) maps each public-report scenario to the rule that would have caught it.
+
+## Run the development benchmark and evaluation split
+
+An internal development benchmark evaluates the policy against labeled cases and writes byte-stable JSON and Markdown reports (exact decision accuracy, a 3x3 confusion matrix, intervention recall, dangerous-allow rate, safe-call friction, approval accuracy, per-category results, and input hashes):
+
+```bash
+./scripts/run-benchmark.sh
+```
+
+The published development evaluation is 47 internally curated cases (26 unsafe
+or approval-required scenarios plus 21 paired safe controls across six
+categories), 84 calls, exact decision accuracy 1.0000, dangerous-allow rate
+0.0000, and safe-call friction 0.0000. A separate internal evaluation split
+adds 23 distinct cases (31 calls). `freeze.json` pins the exact policy and cases
+used and rejects later changes:
+
+```bash
+./scripts/run-holdout-benchmark.sh
+```
+
+Both results are internally curated and internally labeled. The second set was
+authored with access to the policy, and its initial results were inspected
+before the manifest was written. Hash pinning prevents later drift. It does not
+make the set a blind holdout or an independent evaluation. Nothing here is
+externally validated, and none of these numbers measure unseen real-world
+safety.
+
+Optional threshold flags make the benchmark a regression gate. Every threshold
+is validated to the inclusive 0..1 range, each failed threshold is printed,
+and the command exits with code `5` (distinct from `0` allow, `1` replay
+failures, `2` invalid input, `3` approval, `4` block):
+
+```bash
+agent-firewall benchmark --policy benchmarks/v1/policy.json \
+  --cases benchmarks/v1/cases.json --output .agent-tmp/reports \
+  --max-dangerous-allow-rate 0.05 --min-intervention-recall 0.95
+```
+
+Flags: `--max-dangerous-allow-rate`, `--max-safe-friction-rate`,
+`--min-intervention-recall`, `--min-approval-accuracy`,
+`--min-exact-accuracy`. A rate with no calls of its class satisfies a `max`
+threshold but fails a `min` threshold (the metric was not demonstrated).
+Reports stay byte-stable whether or not thresholds are given.
+
+See [benchmarks/v1](benchmarks/v1/README.md) for the case schema, metric definitions, the published results, and why these results are selected replay coverage, not independent or externally validated safety benchmarks.
+
+## Lint, explain, and doctor
+
+`policy lint` statically checks a policy for common problems — a permissive
+default, missing budgets, shadowed duplicate or equivalent rules, broad
+allow-all tool patterns, URL-shaped string globs, allow rules with no argument
+constraints and a broad tool pattern, and approval rules shadowed by broader
+allow rules. Error-level findings exit nonzero; `--format json` is available:
+
+```bash
+agent-firewall policy lint --policy examples/policy.json
+```
+
+`policy explain` shows why a call got its decision: the budget evaluation,
+every rule's tool and argument match result, and the exact runtime decision.
+Both text (default) and JSON output are supported:
+
+```bash
+agent-firewall policy explain --policy examples/policy.json \
+  --tool email.send --arguments '{"to":"customer@example.com"}'
+```
+
+`doctor` probes the pieces the firewall depends on without destructive writes:
+policy loading, state and audit parent writability, an optional MCP child
+command's availability, fail-closed behaviour for an unknown tool, and the
+installed version:
+
+```bash
+agent-firewall doctor --policy examples/policy.json \
+  --state firewall.db --audit firewall-audit.jsonl --mcp python server.py
+```
 
 ## Security posture
 
-An enforcement point, not a sandbox: tool implementations still need least-privilege credentials and OS isolation. Audit logs omit arguments by design because they commonly contain secrets. No prompt-injection detection or multi-host budgets yet; both need a threat model and real usage data.
+An enforcement point, not a sandbox: tool implementations still need least-privilege credentials and OS isolation. Audit logs omit arguments by design because they commonly contain secrets. No prompt-injection detection or multi-host budgets yet; see [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md) for the exact boundary and failure modes.
 
 ## Links
 
 - [Agent Incident Wall](docs/incidents/README.md)
+- [Safe MCP Puppeteer issue 3662 reproduction](reproductions/mcp-puppeteer-3662/README.md)
+- [Threat model](docs/THREAT_MODEL.md)
 - [SECURITY.md](SECURITY.md)
 - [LICENSE](LICENSE): MIT

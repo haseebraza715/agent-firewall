@@ -5,7 +5,7 @@
 #   ./scripts/record-demo.sh          # cast + gif
 #   ./scripts/record-demo.sh --svg    # also render a vector docs/demo.svg
 #
-# Requires: expect, asciinema, jq, and agg (cargo install --git
+# Requires: asciinema and agg (cargo install --git
 # https://github.com/asciinema/agg). --svg additionally needs npx.
 #
 # agg rasterises the text, so the GIF renders identically everywhere. The SVG
@@ -30,28 +30,28 @@ if [ ! -x .venv/bin/agent-firewall ]; then
   exit 1
 fi
 
-for tool in expect asciinema jq agg; do
+for tool in asciinema agg; do
   command -v "$tool" >/dev/null 2>&1 || {
     echo "error: $tool is required to record the demo" >&2
     exit 1
   }
 done
 
-# Start from an empty audit log so the recorded tail shows only this run.
-rm -f firewall-audit.jsonl firewall.db
 mkdir -p docs
 
-# 80 columns renders at 790px, close enough to GitHub's README content width
-# that the result is shown at 1:1 rather than being downscaled.
-COLS=80
-ROWS=26
+# The demo script contains its own short pauses, cleans up its temporary files,
+# and needs no simulated typing. Recording it directly keeps this path reliable.
+COLS=120
+ROWS=44
 
-# expect spawns asciinema, not the other way around; see scripts/demo.exp.
-PATH="$root/.venv/bin:$PATH" \
-COLUMNS="$COLS" LINES="$ROWS" TERM=xterm-256color \
-  expect -f scripts/demo.exp docs/demo.cast "$COLS" "$ROWS"
-
-rm -f firewall-audit.jsonl firewall.db
+TERM=xterm-256color asciinema rec docs/demo.cast \
+  --overwrite \
+  --quiet \
+  --cols "$COLS" \
+  --rows "$ROWS" \
+  --title "Agent Firewall: allow, hold, block" \
+  --idle-time-limit 0.4 \
+  --command ./scripts/demo.sh
 
 agg docs/demo.cast docs/demo.gif \
   --theme github-dark \

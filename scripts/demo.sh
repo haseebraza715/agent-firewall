@@ -6,7 +6,8 @@
 #
 # Three beats, one policy in examples/policy.json:
 #   1. DECIDE -- machine-readable allow / require_approval / block decisions
-#   2. REPLAY -- 11 real-world public incidents, all stopped by that policy
+#   2. REPLAY -- 11 reconstructed incident scenarios (ten from public reports,
+#      one synthetic), all stopped or gated by that policy
 #   3. GUARD  -- the Python Firewall.wrap() API guarding a real function
 #
 # This is self-contained: it prefers the repository's own .venv and otherwise
@@ -99,15 +100,18 @@ run_check "browser.navigate" \
 printf '\n%s\n' "${DIM}Same policy, different calls, different exits: 0 allow, 3 hold, 4 block.${RESET}"
 
 # ---------------------------------------------------------------------------
-banner "2. REPLAY -- eleven incidents, one policy"
-printf '%s\n' "${DIM}These failures are not new: runaway loops, silent side effects, an SSRF --
-all reported as public bugs against other projects. One policy below stops or
-gates every one of the eleven scenarios, ten from real reports.${RESET}"
+banner "2. REPLAY -- eleven reconstructed scenarios, one policy"
+printf '%s\n' "${DIM}These are reconstructed incident scenarios: ten based on public bug
+reports against other projects, one synthetic. One policy below stops or gates
+every one of the eleven scenarios.${RESET}"
 
 "${fw[@]}" replay \
   --policy "$policy" \
   --scenarios "$scenarios" \
   --format text
+
+printf '%s\n' "${DIM}Note: that 11/11 is selected replay coverage, not a held-out safety
+benchmark.${RESET}"
 
 sleep 2
 
