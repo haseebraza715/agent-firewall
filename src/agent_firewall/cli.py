@@ -198,6 +198,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="wait for decisions from the localhost dashboard",
     )
     mcp.add_argument("--approval-timeout", type=float, default=300)
+    mcp.add_argument(
+        "--request-timeout",
+        type=_positive_timeout,
+        default=300,
+        metavar="SECONDS",
+        help="fail closed when the wrapped MCP server takes longer than this",
+    )
     mcp.add_argument("server_command", nargs=argparse.REMAINDER)
 
     dashboard = commands.add_parser(
@@ -229,6 +236,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     approve_terminal=args.approve_terminal,
                     approve_web=args.approve_web,
                     approval_timeout=args.approval_timeout,
+                    request_timeout=args.request_timeout,
                 )
             )
         if args.command == "benchmark":
@@ -381,6 +389,16 @@ def _rate_threshold(value: str) -> float:
         raise argparse.ArgumentTypeError(f"{value!r} is not a number") from exc
     if not 0.0 <= number <= 1.0:
         raise argparse.ArgumentTypeError("threshold must be between 0 and 1 inclusive")
+    return number
+
+
+def _positive_timeout(value: str) -> float:
+    try:
+        number = float(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"{value!r} is not a number") from exc
+    if number <= 0:
+        raise argparse.ArgumentTypeError("request timeout must be positive")
     return number
 
 
