@@ -1,0 +1,34 @@
+{
+  "default_decision": "block",
+  "budget": {
+    "max_calls": 10,
+    "max_calls_per_tool": 3,
+    "max_identical_calls": 2,
+    "max_cost_usd": "0.50"
+  },
+  "rules": [
+    {
+      "tool": "database.query",
+      "decision": "allow",
+      "reason": "read-only queries are allowed"
+    },
+    {
+      "tool": "email.send",
+      "arguments": {
+        "to": "*@mycompany.com"
+      },
+      "decision": "allow",
+      "reason": "company recipients are pre-approved"
+    },
+    {
+      "tool": "email.send",
+      "decision": "require_approval",
+      "reason": "outbound email needs a human decision"
+    },
+    {
+      "tool": "browser.navigate",
+      "decision": "block",
+      "reason": "browser navigation is blocked"
+    }
+  ]
+}
