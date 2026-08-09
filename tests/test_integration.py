@@ -50,8 +50,10 @@ class FirewallPipelineTests(unittest.TestCase):
 
     def test_full_pipeline_allow_execute_and_audit(self):
         directory, firewall, _, audit_path = self._setup(
-            {"default_decision": "block",
-             "rules": [{"tool": "math.add", "decision": "allow"}]}
+            {
+                "default_decision": "block",
+                "rules": [{"tool": "math.add", "decision": "allow"}],
+            }
         )
         with directory:
             result = firewall.call("math.add", lambda a, b: a + b, 1, 2)
@@ -67,9 +69,7 @@ class FirewallPipelineTests(unittest.TestCase):
             self.assertNotIn("arguments", entries[0])
 
     def test_full_pipeline_block_never_executes_and_audits(self):
-        directory, firewall, _, audit_path = self._setup(
-            {"default_decision": "block"}
-        )
+        directory, firewall, _, audit_path = self._setup({"default_decision": "block"})
         with directory:
             executed = []
             with self.assertRaises(ToolCallBlocked):
@@ -84,8 +84,10 @@ class FirewallPipelineTests(unittest.TestCase):
 
     def test_full_pipeline_approval_granted_executes(self):
         directory, firewall, _, audit_path = self._setup(
-            {"default_decision": "block",
-             "rules": [{"tool": "email.send", "decision": "require_approval"}]},
+            {
+                "default_decision": "block",
+                "rules": [{"tool": "email.send", "decision": "require_approval"}],
+            },
             approver=lambda call, decision: True,
         )
         with directory:
@@ -128,35 +130,38 @@ class FirewallPipelineTests(unittest.TestCase):
 
     def test_async_pipeline_with_audit_and_state(self):
         directory, firewall, _, audit_path = self._setup(
-            {"default_decision": "block",
-             "rules": [{"tool": "math.add", "decision": "allow"}]}
+            {
+                "default_decision": "block",
+                "rules": [{"tool": "math.add", "decision": "allow"}],
+            }
         )
         with directory:
+
             async def run():
-                return await firewall.acall(
-                    "math.add", lambda a, b: a + b, 20, 22
-                )
+                return await firewall.acall("math.add", lambda a, b: a + b, 20, 22)
 
             self.assertEqual(asyncio.run(run()), 42)
             self.assertEqual(firewall.usage.tool_calls, 1)
 
     def test_async_approver_via_acall(self):
         directory, firewall, _, _ = self._setup(
-            {"default_decision": "block",
-             "rules": [{"tool": "email.send", "decision": "require_approval"}]},
+            {
+                "default_decision": "block",
+                "rules": [{"tool": "email.send", "decision": "require_approval"}],
+            },
             approver=None,
         )
         with directory:
             firewall.approver = _AsyncTrue()
-            result = asyncio.run(
-                firewall.acall("email.send", lambda: "sent")
-            )
+            result = asyncio.run(firewall.acall("email.send", lambda: "sent"))
             self.assertEqual(result, "sent")
 
     def test_sync_call_with_async_approver_raises_type_error(self):
         directory, firewall, _, _ = self._setup(
-            {"default_decision": "block",
-             "rules": [{"tool": "email.send", "decision": "require_approval"}]},
+            {
+                "default_decision": "block",
+                "rules": [{"tool": "email.send", "decision": "require_approval"}],
+            },
             approver=None,
         )
         with directory:
@@ -166,10 +171,13 @@ class FirewallPipelineTests(unittest.TestCase):
 
     def test_failed_tool_call_is_audited_and_consumes_budget(self):
         directory, firewall, _, audit_path = self._setup(
-            {"default_decision": "block",
-             "rules": [{"tool": "math.add", "decision": "allow"}]}
+            {
+                "default_decision": "block",
+                "rules": [{"tool": "math.add", "decision": "allow"}],
+            }
         )
         with directory:
+
             def boom():
                 raise RuntimeError("boom")
 
@@ -181,21 +189,22 @@ class FirewallPipelineTests(unittest.TestCase):
                 for line in audit_path.read_text(encoding="utf-8").splitlines()
             ]
             self.assertEqual(events[-1], "failed")
-            self.assertIn("error", json.loads(
-                audit_path.read_text(encoding="utf-8").splitlines()[-1]
-            ))
+            self.assertIn(
+                "error",
+                json.loads(audit_path.read_text(encoding="utf-8").splitlines()[-1]),
+            )
 
     def test_full_hash_audit_mode_pipeline(self):
         directory, firewall, _, audit_path = self._setup(
-            {"default_decision": "block",
-             "rules": [{"tool": "search", "decision": "allow"}]},
+            {
+                "default_decision": "block",
+                "rules": [{"tool": "search", "decision": "allow"}],
+            },
             audit_mode="hash",
         )
         with directory:
             firewall.call("search", lambda q: q, q="secret query")
-            entry = json.loads(
-                audit_path.read_text(encoding="utf-8").splitlines()[0]
-            )
+            entry = json.loads(audit_path.read_text(encoding="utf-8").splitlines()[0])
             self.assertEqual(entry["event"], "allowed")
             self.assertEqual(len(entry["call_fingerprint"]), 64)
             self.assertNotIn("secret query", json.dumps(entry))
@@ -215,8 +224,10 @@ class PolicyReloadTests(unittest.TestCase):
             audit_path = root / "audit.jsonl"
             policy_path.write_text(
                 json.dumps(
-                    {"default_decision": "block",
-                     "rules": [{"tool": "demo.tool", "decision": "allow"}]}
+                    {
+                        "default_decision": "block",
+                        "rules": [{"tool": "demo.tool", "decision": "allow"}],
+                    }
                 ),
                 encoding="utf-8",
             )
@@ -257,8 +268,7 @@ class PolicyReloadTests(unittest.TestCase):
             state_path = root / "state.db"
             policy_path.write_text(
                 json.dumps(
-                    {"default_decision": "allow",
-                     "budget": {"max_identical_calls": 1}}
+                    {"default_decision": "allow", "budget": {"max_identical_calls": 1}}
                 ),
                 encoding="utf-8",
             )
@@ -266,8 +276,7 @@ class PolicyReloadTests(unittest.TestCase):
             first.call("search", lambda query: query, query="same")
             policy_path.write_text(
                 json.dumps(
-                    {"default_decision": "allow",
-                     "budget": {"max_identical_calls": 1}}
+                    {"default_decision": "allow", "budget": {"max_identical_calls": 1}}
                 ),
                 encoding="utf-8",
             )
@@ -287,8 +296,15 @@ class CliFlagTests(unittest.TestCase):
             policy_path = self._policy(Path(directory))
             with redirect_stderr(io.StringIO()) as stderr:
                 status = main(
-                    ["check", "--policy", str(policy_path), "--tool", "x",
-                     "--cost", "not-a-number"]
+                    [
+                        "check",
+                        "--policy",
+                        str(policy_path),
+                        "--tool",
+                        "x",
+                        "--cost",
+                        "not-a-number",
+                    ]
                 )
             self.assertEqual(status, 2)
             self.assertIn("cost", stderr.getvalue())
@@ -298,8 +314,15 @@ class CliFlagTests(unittest.TestCase):
             policy_path = self._policy(Path(directory))
             with redirect_stderr(io.StringIO()):
                 status = main(
-                    ["check", "--policy", str(policy_path), "--tool", "x",
-                     "--arguments", "[1, 2]"]
+                    [
+                        "check",
+                        "--policy",
+                        str(policy_path),
+                        "--tool",
+                        "x",
+                        "--arguments",
+                        "[1, 2]",
+                    ]
                 )
             self.assertEqual(status, 2)
 
@@ -308,8 +331,15 @@ class CliFlagTests(unittest.TestCase):
             policy_path = self._policy(Path(directory))
             with redirect_stderr(io.StringIO()):
                 status = main(
-                    ["check", "--policy", str(policy_path), "--tool", "x",
-                     "--arguments", "{not json"]
+                    [
+                        "check",
+                        "--policy",
+                        str(policy_path),
+                        "--tool",
+                        "x",
+                        "--arguments",
+                        "{not json",
+                    ]
                 )
             self.assertEqual(status, 2)
 
@@ -319,8 +349,15 @@ class CliFlagTests(unittest.TestCase):
             deep = "[" * 50000 + "1" + "]" * 50000
             with redirect_stderr(io.StringIO()):
                 status = main(
-                    ["check", "--policy", str(policy_path), "--tool", "x",
-                     "--arguments", deep]
+                    [
+                        "check",
+                        "--policy",
+                        str(policy_path),
+                        "--tool",
+                        "x",
+                        "--arguments",
+                        deep,
+                    ]
                 )
             self.assertEqual(status, 2)
 
@@ -332,8 +369,13 @@ class CliFlagTests(unittest.TestCase):
             scenarios.write_text('{"not": "a list"}', encoding="utf-8")
             with redirect_stderr(io.StringIO()):
                 status = main(
-                    ["replay", "--policy", str(policy_path),
-                     "--scenarios", str(scenarios)]
+                    [
+                        "replay",
+                        "--policy",
+                        str(policy_path),
+                        "--scenarios",
+                        str(scenarios),
+                    ]
                 )
             self.assertEqual(status, 2)
 
@@ -343,14 +385,26 @@ class CliFlagTests(unittest.TestCase):
             policy_path = self._policy(root)
             scenarios = root / "scenarios.json"
             scenarios.write_text(
-                json.dumps([{"id": "x", "calls": [{"tool": 5}],
-                             "expected_decisions": ["block"]}]),
+                json.dumps(
+                    [
+                        {
+                            "id": "x",
+                            "calls": [{"tool": 5}],
+                            "expected_decisions": ["block"],
+                        }
+                    ]
+                ),
                 encoding="utf-8",
             )
             with redirect_stderr(io.StringIO()):
                 status = main(
-                    ["replay", "--policy", str(policy_path),
-                     "--scenarios", str(scenarios)]
+                    [
+                        "replay",
+                        "--policy",
+                        str(policy_path),
+                        "--scenarios",
+                        str(scenarios),
+                    ]
                 )
             self.assertEqual(status, 2)
 
@@ -381,10 +435,14 @@ class CliFlagTests(unittest.TestCase):
                 status = main(
                     [
                         "benchmark",
-                        "--policy", str(policy_path),
-                        "--cases", str(cases_path),
-                        "--output", str(output),
-                        "--min-intervention-recall", "1.0",
+                        "--policy",
+                        str(policy_path),
+                        "--cases",
+                        str(cases_path),
+                        "--output",
+                        str(output),
+                        "--min-intervention-recall",
+                        "1.0",
                     ]
                 )
             self.assertEqual(status, 5)
@@ -419,10 +477,14 @@ class CliFlagTests(unittest.TestCase):
                 status = main(
                     [
                         "benchmark",
-                        "--policy", str(policy_path),
-                        "--cases", str(cases_path),
-                        "--output", str(output),
-                        "--min-intervention-recall", "1.0",
+                        "--policy",
+                        str(policy_path),
+                        "--cases",
+                        str(cases_path),
+                        "--output",
+                        str(output),
+                        "--min-intervention-recall",
+                        "1.0",
                     ]
                 )
             self.assertEqual(status, 0)
@@ -432,8 +494,17 @@ class CliFlagTests(unittest.TestCase):
 
         with self.assertRaises(SystemExit) as raised:
             build_parser().parse_args(
-                ["benchmark", "--policy", "p", "--cases", "c",
-                 "--output", "o", "--min-intervention-recall", "1.5"]
+                [
+                    "benchmark",
+                    "--policy",
+                    "p",
+                    "--cases",
+                    "c",
+                    "--output",
+                    "o",
+                    "--min-intervention-recall",
+                    "1.5",
+                ]
             )
         self.assertEqual(raised.exception.code, 2)
 
@@ -442,8 +513,17 @@ class CliFlagTests(unittest.TestCase):
 
         with self.assertRaises(SystemExit) as raised:
             build_parser().parse_args(
-                ["mcp", "--policy", "p", "--approve-terminal",
-                 "--approve-web", "--state", "s", "--", "echo"]
+                [
+                    "mcp",
+                    "--policy",
+                    "p",
+                    "--approve-terminal",
+                    "--approve-web",
+                    "--state",
+                    "s",
+                    "--",
+                    "echo",
+                ]
             )
         self.assertEqual(raised.exception.code, 2)
 
@@ -469,10 +549,17 @@ class CliFlagTests(unittest.TestCase):
             audit_path.write_text("", encoding="utf-8")
             with redirect_stderr(io.StringIO()):
                 status = main(
-                    ["dashboard", "--policy", str(policy_path),
-                     "--audit", str(audit_path),
-                     "--state", str(state_path),
-                     "--host", "0.0.0.0"]
+                    [
+                        "dashboard",
+                        "--policy",
+                        str(policy_path),
+                        "--audit",
+                        str(audit_path),
+                        "--state",
+                        str(state_path),
+                        "--host",
+                        "0.0.0.0",
+                    ]
                 )
             self.assertEqual(status, 2)
 
@@ -481,16 +568,22 @@ class CliFlagTests(unittest.TestCase):
             policy_path = self._policy(Path(directory))
             with redirect_stderr(io.StringIO()):
                 status = main(
-                    ["policy", "explain", "--policy", str(policy_path),
-                     "--tool", "x", "--arguments", "nope"]
+                    [
+                        "policy",
+                        "explain",
+                        "--policy",
+                        str(policy_path),
+                        "--tool",
+                        "x",
+                        "--arguments",
+                        "nope",
+                    ]
                 )
             self.assertEqual(status, 2)
 
     def test_doctor_missing_policy_reports_failure(self):
         with redirect_stderr(io.StringIO()):
-            status = main(
-                ["doctor", "--policy", "/nonexistent/policy.json"]
-            )
+            status = main(["doctor", "--policy", "/nonexistent/policy.json"])
         self.assertEqual(status, 1)
 
     def test_lint_deeply_nested_policy_exits_two(self):
@@ -498,9 +591,7 @@ class CliFlagTests(unittest.TestCase):
             policy_path = Path(directory) / "policy.json"
             policy_path.write_text("[" * 50000 + "1" + "]" * 50000, encoding="utf-8")
             with redirect_stderr(io.StringIO()):
-                status = main(
-                    ["policy", "lint", "--policy", str(policy_path)]
-                )
+                status = main(["policy", "lint", "--policy", str(policy_path)])
             self.assertEqual(status, 2)
 
 
@@ -512,9 +603,14 @@ class McpProxyHardeningTests(unittest.TestCase):
             env = dict(os.environ)
             env["PYTHONPATH"] = str(ROOT / "src")
             command = [
-                sys.executable, "-m", "agent_firewall", "mcp",
-                "--policy", str(policy_path),
-                "--request-timeout", "3",
+                sys.executable,
+                "-m",
+                "agent_firewall",
+                "mcp",
+                "--policy",
+                str(policy_path),
+                "--request-timeout",
+                "3",
             ]
             if extra_flags:
                 command.extend(extra_flags)
@@ -534,17 +630,17 @@ class McpProxyHardeningTests(unittest.TestCase):
     def test_oversized_client_line_is_rejected_and_proxy_survives(self):
         big_line = (
             b'{"jsonrpc":"2.0","id":1,"method":"tools/call",'
-            b'"params":{"name":"x","arguments":{"data":"'
-            + b"a" * 4096
-            + b'"}}}\n'
+            b'"params":{"name":"x","arguments":{"data":"' + b"a" * 4096 + b'"}}}\n'
         )
         valid = (
             b'{"jsonrpc":"2.0","id":2,"method":"tools/call",'
             b'"params":{"name":"database.query","arguments":{"sql":"select 1"}}}\n'
         )
         rc, stdout, stderr = self.run_proxy(
-            {"default_decision": "block",
-             "rules": [{"tool": "database.query", "decision": "allow"}]},
+            {
+                "default_decision": "block",
+                "rules": [{"tool": "database.query", "decision": "allow"}],
+            },
             [big_line, valid],
             extra_flags=["--max-line-bytes", "1024"],
         )
@@ -557,15 +653,20 @@ class McpProxyHardeningTests(unittest.TestCase):
     def test_deeply_nested_client_message_is_rejected_and_proxy_survives(self):
         deep = (
             b'{"jsonrpc":"2.0","id":1,"method":"tools/call","params":'
-            + b'{"a":' * 20000 + b"1" + b"}" * 20000 + b"}\n"
+            + b'{"a":' * 20000
+            + b"1"
+            + b"}" * 20000
+            + b"}\n"
         )
         valid = (
             b'{"jsonrpc":"2.0","id":2,"method":"tools/call",'
             b'"params":{"name":"database.query","arguments":{"sql":"select 1"}}}\n'
         )
         rc, stdout, stderr = self.run_proxy(
-            {"default_decision": "block",
-             "rules": [{"tool": "database.query", "decision": "allow"}]},
+            {
+                "default_decision": "block",
+                "rules": [{"tool": "database.query", "decision": "allow"}],
+            },
             [deep, valid],
         )
         self.assertEqual(rc, 0, stderr.decode())
@@ -591,8 +692,10 @@ class McpProxyHardeningTests(unittest.TestCase):
             b'"params":{"name":"database.query","arguments":{"sql":"select 1"}}}\n'
         )
         rc, stdout, stderr = self.run_proxy(
-            {"default_decision": "block",
-             "rules": [{"tool": "database.query", "decision": "allow"}]},
+            {
+                "default_decision": "block",
+                "rules": [{"tool": "database.query", "decision": "allow"}],
+            },
             [valid],
             extra_flags=["--max-line-bytes", "1024"],
             server=child_script,
@@ -607,11 +710,14 @@ class McpProxyHardeningTests(unittest.TestCase):
         big_line = (
             b'{"jsonrpc":"2.0","id":1,"method":"tools/call",'
             b'"params":{"name":"database.query","arguments":{"sql":"'
-            + b"a" * 4096 + b'"}}}\n'
+            + b"a" * 4096
+            + b'"}}}\n'
         )
         rc, stdout, stderr = self.run_proxy(
-            {"default_decision": "block",
-             "rules": [{"tool": "database.query", "decision": "allow"}]},
+            {
+                "default_decision": "block",
+                "rules": [{"tool": "database.query", "decision": "allow"}],
+            },
             [big_line],
         )
         self.assertEqual(rc, 0, stderr.decode())
@@ -626,8 +732,10 @@ class McpProxyHardeningTests(unittest.TestCase):
             b'"_meta":{"estimated_cost_usd":"abc"}}}\n'
         )
         rc, stdout, stderr = self.run_proxy(
-            {"default_decision": "block",
-             "rules": [{"tool": "database.query", "decision": "allow"}]},
+            {
+                "default_decision": "block",
+                "rules": [{"tool": "database.query", "decision": "allow"}],
+            },
             [message],
         )
         self.assertEqual(rc, 0, stderr.decode())
@@ -661,8 +769,10 @@ class McpProxyHardeningTests(unittest.TestCase):
             b'"params":{"name":"database.query","arguments":{"sql":"select 1"}}}\n'
         )
         rc, stdout, stderr = self.run_proxy(
-            {"default_decision": "block",
-             "rules": [{"tool": "database.query", "decision": "allow"}]},
+            {
+                "default_decision": "block",
+                "rules": [{"tool": "database.query", "decision": "allow"}],
+            },
             [malformed, valid],
         )
         self.assertEqual(rc, 0, stderr.decode())
@@ -674,8 +784,10 @@ class McpProxyHardeningTests(unittest.TestCase):
 
     def test_non_object_line_is_rejected_not_forwarded(self):
         rc, stdout, stderr = self.run_proxy(
-            {"default_decision": "block",
-             "rules": [{"tool": "database.query", "decision": "allow"}]},
+            {
+                "default_decision": "block",
+                "rules": [{"tool": "database.query", "decision": "allow"}],
+            },
             [b'"just a string"\n'],
         )
         self.assertEqual(rc, 0, stderr.decode())
@@ -688,8 +800,10 @@ class McpProxyHardeningTests(unittest.TestCase):
             b'"params":{"name":"database.query","arguments":{"sql":"select 1"}}}\n'
         )
         rc, stdout, stderr = self.run_proxy(
-            {"default_decision": "block",
-             "rules": [{"tool": "database.query", "decision": "allow"}]},
+            {
+                "default_decision": "block",
+                "rules": [{"tool": "database.query", "decision": "allow"}],
+            },
             [b"\n", b"\n", valid],
         )
         self.assertEqual(rc, 0, stderr.decode())
@@ -704,8 +818,10 @@ class McpProxyHardeningTests(unittest.TestCase):
             b'"params":{"name":"database.query","arguments":{"sql":"select 1"}}}\n'
         )
         rc, stdout, stderr = self.run_proxy(
-            {"default_decision": "block",
-             "rules": [{"tool": "database.query", "decision": "allow"}]},
+            {
+                "default_decision": "block",
+                "rules": [{"tool": "database.query", "decision": "allow"}],
+            },
             [deep_batch, valid],
         )
         self.assertEqual(rc, 0, stderr.decode())

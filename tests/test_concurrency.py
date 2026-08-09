@@ -52,9 +52,7 @@ class AuditLogConcurrencyTests(unittest.TestCase):
             lines = path.read_text(encoding="utf-8").splitlines()
             self.assertEqual(len(lines), threads * records_per_thread)
             entries = [json.loads(line) for line in lines]
-            self.assertTrue(
-                all(entry["event"] == "allowed" for entry in entries)
-            )
+            self.assertTrue(all(entry["event"] == "allowed" for entry in entries))
             self.assertEqual(
                 len({entry["call_id"] for entry in entries}),
                 threads * records_per_thread,
@@ -81,8 +79,7 @@ class AuditLogConcurrencyTests(unittest.TestCase):
                     )
 
             workers = [
-                threading.Thread(target=writer, args=(index,))
-                for index in range(4)
+                threading.Thread(target=writer, args=(index,)) for index in range(4)
             ]
             for worker in workers:
                 worker.start()
@@ -141,9 +138,7 @@ class MemoryStateConcurrencyTests(unittest.TestCase):
         def reader():
             while not stop.is_set():
                 usage = store.usage()
-                observed.append(
-                    (usage.tool_calls, usage.calls_by_tool.get("tool", 0))
-                )
+                observed.append((usage.tool_calls, usage.calls_by_tool.get("tool", 0)))
 
         reader_thread = threading.Thread(target=reader)
         reader_thread.start()
@@ -177,9 +172,7 @@ class ApprovalQueueConcurrencyTests(unittest.TestCase):
             final = queue.get(call.id).status
             self.assertIn(final, ("approved", "denied"))
             conflicts = sum(
-                1
-                for status, result in zip(statuses, results)
-                if status != final
+                1 for status, result in zip(statuses, results) if status != final
             )
             self.assertEqual(results.count("conflict"), conflicts)
             self.assertEqual(results.count("won"), len(statuses) - conflicts)
@@ -195,11 +188,7 @@ class ApprovalQueueConcurrencyTests(unittest.TestCase):
             call = ToolCall.create("email.send")
 
             with ThreadPoolExecutor(max_workers=8) as executor:
-                list(
-                    executor.map(
-                        lambda _: queue.request(call, _decision()), range(8)
-                    )
-                )
+                list(executor.map(lambda _: queue.request(call, _decision()), range(8)))
 
             self.assertEqual(len(queue.pending()), 1)
             self.assertEqual(queue.get(call.id).status, "pending")
@@ -341,9 +330,7 @@ class SQLiteStateConcurrencyTests(unittest.TestCase):
             def hammer(store):
                 while not stop.is_set():
                     try:
-                        store.evaluate_and_reserve(
-                            policy, ToolCall.create("search")
-                        )
+                        store.evaluate_and_reserve(policy, ToolCall.create("search"))
                     except Exception:
                         pass
 

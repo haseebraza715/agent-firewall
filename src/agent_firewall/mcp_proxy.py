@@ -210,9 +210,7 @@ class McpStdioProxy:
             # Undecodable or non-object lines are never forwarded: a lenient
             # wrapped server might salvage a tools/call out of them, so they
             # are rejected here instead of bypassing the policy.
-            self._write_client(
-                self._parse_error_response("invalid JSON-RPC message")
-            )
+            self._write_client(self._parse_error_response("invalid JSON-RPC message"))
             return
 
         if message.get("method") != "tools/call":

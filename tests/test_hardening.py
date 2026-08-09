@@ -74,8 +74,14 @@ class PrivateNetworkBypassTests(unittest.TestCase):
 
     def test_private_ranges_are_denied(self):
         pattern = self._pattern()
-        for address in ("10.0.0.1", "172.16.0.1", "192.168.1.1", "169.254.1.1",
-                        "0.0.0.0", "100.64.0.1"):
+        for address in (
+            "10.0.0.1",
+            "172.16.0.1",
+            "192.168.1.1",
+            "169.254.1.1",
+            "0.0.0.0",
+            "100.64.0.1",
+        ):
             with self.subTest(address=address):
                 self.assertFalse(matchers.match(pattern, f"http://{address}/"))
 
@@ -109,7 +115,11 @@ class PrivateNetworkBypassTests(unittest.TestCase):
                 ],
             }
         )
-        for url in ("http://127.1/x", "http://2130706433/x", "http://[::ffff:127.0.0.1]/"):
+        for url in (
+            "http://127.1/x",
+            "http://2130706433/x",
+            "http://[::ffff:127.0.0.1]/",
+        ):
             decision = policy.evaluate(
                 ToolCall.create("url.fetch", {"url": url}), Usage()
             )
@@ -162,9 +172,7 @@ class StrictEqualityTests(unittest.TestCase):
 
     def test_nested_dict_is_strict_recursively(self):
         pattern = {"level": {"amount": 5, "meta": {"flag": 1}}}
-        exact = self.evaluate(
-            pattern, {"level": {"amount": 5, "meta": {"flag": 1}}}
-        )
+        exact = self.evaluate(pattern, {"level": {"amount": 5, "meta": {"flag": 1}}})
         bool_flag = self.evaluate(
             pattern, {"level": {"amount": 5, "meta": {"flag": True}}}
         )
@@ -294,21 +302,18 @@ class DeepJsonHardeningTests(unittest.TestCase):
     def test_read_events_skips_deep_lines(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "audit.jsonl"
-            path.write_bytes(
-                _deep_line(50000) + b'{"event": "allowed"}\n'
-            )
+            path.write_bytes(_deep_line(50000) + b'{"event": "allowed"}\n')
             events = read_events(path, limit=None)
             self.assertEqual([event["event"] for event in events], ["allowed"])
 
     def test_read_events_skips_malformed_lines(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "audit.jsonl"
-            path.write_text('{"event": "ok"}\ngarbage\n{"event": "later"}\n',
-                            encoding="utf-8")
-            events = read_events(path, limit=None)
-            self.assertEqual(
-                [event["event"] for event in events], ["ok", "later"]
+            path.write_text(
+                '{"event": "ok"}\ngarbage\n{"event": "later"}\n', encoding="utf-8"
             )
+            events = read_events(path, limit=None)
+            self.assertEqual([event["event"] for event in events], ["ok", "later"])
 
     def test_read_events_respects_limit(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -318,9 +323,7 @@ class DeepJsonHardeningTests(unittest.TestCase):
                 encoding="utf-8",
             )
             events = read_events(path, limit=3)
-            self.assertEqual(
-                [event["event"] for event in events], ["7", "8", "9"]
-            )
+            self.assertEqual([event["event"] for event in events], ["7", "8", "9"])
 
 
 class PathOperatorStrictnessTests(unittest.TestCase):
@@ -353,16 +356,10 @@ class PolicyLoadingEdgeCaseTests(unittest.TestCase):
 
     def test_rule_with_empty_arguments_matches_any_arguments(self):
         policy = Policy.from_dict(
-            {
-                "rules": [
-                    {"tool": "demo.tool", "arguments": {}, "decision": "allow"}
-                ]
-            }
+            {"rules": [{"tool": "demo.tool", "arguments": {}, "decision": "allow"}]}
         )
         for args in ({}, {"anything": 1}, {"nested": {"x": [1, 2]}}):
-            decision = policy.evaluate(
-                ToolCall.create("demo.tool", args), Usage()
-            )
+            decision = policy.evaluate(ToolCall.create("demo.tool", args), Usage())
             self.assertEqual(decision.kind, DecisionKind.ALLOW, args)
 
     def test_rule_without_arguments_key_matches_any_arguments(self):
@@ -390,9 +387,15 @@ class PolicyLoadingEdgeCaseTests(unittest.TestCase):
                     Policy.from_dict({"rules": rules})
 
     def test_malformed_budget_shapes_are_rejected(self):
-        for budget in ("x", [], {"max_calls": 0}, {"max_calls": -1},
-                       {"max_calls": 1.5}, {"max_calls": True},
-                       {"max_cost_usd": "abc"}):
+        for budget in (
+            "x",
+            [],
+            {"max_calls": 0},
+            {"max_calls": -1},
+            {"max_calls": 1.5},
+            {"max_calls": True},
+            {"max_cost_usd": "abc"},
+        ):
             with self.subTest(budget=budget):
                 with self.assertRaises(PolicyConfigError):
                     Policy.from_dict({"budget": budget})
@@ -426,8 +429,11 @@ class MalformedPolicyFileTests(unittest.TestCase):
 
     def test_duplicate_keys_are_rejected(self):
         with self.assertRaises(PolicyConfigError):
-            Policy.load(self._write('{"default_decision": "block", '
-                                    '"default_decision": "allow"}'))
+            Policy.load(
+                self._write(
+                    '{"default_decision": "block", "default_decision": "allow"}'
+                )
+            )
 
     def test_bom_prefixed_policy(self):
         with self.assertRaises(PolicyConfigError):
@@ -460,9 +466,7 @@ class ExplainMultiBudgetTests(unittest.TestCase):
         triggered = {
             check.name for check in explanation.budget.checks if check.triggered
         }
-        self.assertEqual(
-            triggered, {"max_calls", "max_cost_usd"}
-        )
+        self.assertEqual(triggered, {"max_calls", "max_cost_usd"})
         self.assertEqual(explanation.budget.message, "run tool-call budget exhausted")
 
 
@@ -502,9 +506,7 @@ class HugePayloadTests(unittest.TestCase):
     def test_megabyte_url(self):
         url = "http://example.com/" + "p" * 1_000_000
         self.assertTrue(
-            matchers.match(
-                {"operator": "url", "hostname": "example.com"}, url
-            )
+            matchers.match({"operator": "url", "hostname": "example.com"}, url)
         )
 
     def test_megabyte_command_argv(self):
@@ -517,19 +519,13 @@ class HugePayloadTests(unittest.TestCase):
 
     def test_long_path_value(self):
         value = "/tmp/" + "d/" * 100000 + "file"
-        self.assertTrue(
-            matchers.match({"operator": "path", "within": "/tmp"}, value)
-        )
-        self.assertFalse(
-            matchers.match({"operator": "path", "within": "/etc"}, value)
-        )
+        self.assertTrue(matchers.match({"operator": "path", "within": "/tmp"}, value))
+        self.assertFalse(matchers.match({"operator": "path", "within": "/etc"}, value))
 
     def test_many_star_glob_is_not_pathological(self):
         pattern = "*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a"
         self.assertTrue(matchers.glob_match(pattern, "a" * 100_000))
-        self.assertFalse(
-            matchers.glob_match(pattern, "a" * 99_999 + "b")
-        )
+        self.assertFalse(matchers.glob_match(pattern, "a" * 99_999 + "b"))
 
     def test_glob_match_matches_fnmatch_semantics(self):
         import fnmatch
@@ -586,9 +582,7 @@ class UnicodeTests(unittest.TestCase):
         )
 
     def test_unicode_glob_value(self):
-        self.assertTrue(
-            matchers.glob_match("*é*", "héllo")
-        )
+        self.assertTrue(matchers.glob_match("*é*", "héllo"))
 
 
 class DoctorEmptyCommandTests(unittest.TestCase):

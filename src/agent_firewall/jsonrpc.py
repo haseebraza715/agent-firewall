@@ -32,9 +32,7 @@ def encode_message(message: Mapping[str, Any]) -> bytes:
     Raises ``ValueError`` when the message is nested too deeply to encode.
     """
     try:
-        encoded = json.dumps(
-            message, separators=(",", ":"), ensure_ascii=False
-        )
+        encoded = json.dumps(message, separators=(",", ":"), ensure_ascii=False)
     except RecursionError as exc:
         raise ValueError("JSON message is nested too deeply") from exc
     return (encoded + "\n").encode("utf-8")
