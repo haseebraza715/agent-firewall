@@ -4,7 +4,6 @@ import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from decimal import Decimal
-from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +13,19 @@ from .models import ArgumentAuditMode, Decision, DecisionKind, ToolCall, Usage, 
 
 class PolicyConfigError(ValueError):
     pass
+
+
+def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate JSON key: {key!r}")
+        result[key] = value
+    return result
+
+
+def _load_json_strict(text: str) -> Any:
+    return json.loads(text, object_pairs_hook=_reject_duplicate_keys)
 
 
 @dataclass(frozen=True)
@@ -42,13 +54,17 @@ class Policy:
     @classmethod
     def load(cls, path: Path) -> Policy:
         try:
-            raw = json.loads(path.read_text(encoding="utf-8"))
+            raw = _load_json_strict(path.read_text(encoding="utf-8"))
         except OSError as exc:
             raise PolicyConfigError(f"cannot read policy: {exc}") from exc
         except json.JSONDecodeError as exc:
             raise PolicyConfigError(
                 f"invalid JSON at line {exc.lineno}, column {exc.colno}"
             ) from exc
+        except ValueError as exc:
+            raise PolicyConfigError(str(exc)) from exc
+        except RecursionError as exc:
+            raise PolicyConfigError("policy JSON is nested too deeply") from exc
         return cls.from_dict(raw)
 
     @classmethod
@@ -233,7 +249,7 @@ def _optional_money(value: Any, field: str) -> Decimal | None:
 
 
 def rule_tool_matches(rule: Rule, call: ToolCall) -> bool:
-    return fnmatchcase(call.name, rule.tool)
+    return matchers.glob_match(rule.tool, call.name)
 
 
 def rule_arguments_match(rule: Rule, call: ToolCall) -> bool:
@@ -256,8 +272,32 @@ def _arguments_match(
             if not matchers.match(pattern, value):
                 return False
         elif isinstance(pattern, str):
-            if not isinstance(value, str) or not fnmatchcase(value, pattern):
+            if not isinstance(value, str) or not matchers.glob_match(pattern, value):
                 return False
-        elif value != pattern:
+        elif not _strict_equal(value, pattern):
             return False
     return True
+
+
+def _strict_equal(actual: Any, expected: Any) -> bool:
+    """Type-strict equality: 1 does not equal True, 500 does not equal 500.0.
+
+    Plain Python equality lets values of different JSON types compare equal
+    (``1 == True``, ``500 == 500.0``), which would make an exact-value rule
+    match arguments the policy author did not intend to allow.
+    """
+    if type(actual) is not type(expected):
+        return False
+    if isinstance(expected, dict):
+        if len(actual) != len(expected):
+            return False
+        return all(
+            key in actual and _strict_equal(actual[key], item)
+            for key, item in expected.items()
+        )
+    if isinstance(expected, list):
+        return len(actual) == len(expected) and all(
+            _strict_equal(actual_item, expected_item)
+            for actual_item, expected_item in zip(actual, expected)
+        )
+    return bool(actual == expected)

@@ -48,9 +48,12 @@ in the URL; implied defaults are not applied.
 
 `deny_private_networks` classifies the hostname **only when it is a literal
 IPv4 or IPv6 address**. Loopback, link-local, private, reserved, and other
-non-globally-routable literal addresses do not match. DNS resolution and HTTP
-redirects are deliberately not inspected, and a non-IP hostname is never
-denied by this field.
+non-globally-routable literal addresses do not match. Legacy encodings that
+common resolvers still accept are classified as well — `127.1`,
+`2130706433`, `0x7f000001`, and leading zeros all resolve to loopback, and
+an IPv6 zone id (`[fe80::1%25eth0]`) does not hide a link-local address. DNS
+resolution and HTTP redirects are deliberately not inspected, and a non-IP
+hostname is never denied by this field.
 
 ## `path`
 
