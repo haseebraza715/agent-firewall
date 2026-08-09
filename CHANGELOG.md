@@ -2,7 +2,33 @@
 
 ## Unreleased
 
-Nothing yet.
+- Harden `deny_private_networks`: legacy IPv4 encodings (`127.1`,
+  `2130706433`, `0x7f000001`, leading zeros) and IPv6 zone ids are now
+  classified as the literal addresses they resolve to, closing an SSRF-style
+  bypass of the private-networks gate.
+- Make exact-value argument rules type-strict: `1` no longer matches `true`
+  and `500` no longer matches `500.0` in policy `arguments`.
+- Reject JSON policy, benchmark case, and freeze files with duplicate keys at
+  load time so a duplicate-key typo cannot silently widen enforcement.
+- Bound JSON processing depth everywhere agent-controlled data is serialized
+  (tool fingerprints, audit records) or parsed (MCP proxy, CLI, dashboard,
+  policy and benchmark loading), preventing `RecursionError` crashes on
+  pathologically nested input.
+- Add `--max-line-bytes` to the `mcp` command (default 64 MiB); oversized
+  client or child lines are rejected or dropped without losing framing.
+- Never forward undecodable or non-object client lines to the wrapped MCP
+  server: they are rejected with a JSON-RPC parse error instead of risking
+  execution by a lenient server outside the policy.
+- Reject batch requests whose elements would smuggle a `tools/call` past the
+  per-line policy check; keep the per-element `-32600` rejection for batches
+  that parse.
+- Cache glob-to-regex translation so policy evaluation and matchers no longer
+  recompile patterns on every call.
+- `policy explain` now marks every exhausted budget check, not only the first
+  one the policy reports.
+- Corrupted SQLite state rows now raise `StorageError` instead of leaking
+  `TypeError`/`InvalidOperation`; `doctor` reports an explicitly empty MCP
+  command as a failed check.
 
 ## 0.3.0 - 2026-08-08
 
