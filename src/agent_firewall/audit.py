@@ -7,7 +7,7 @@ from threading import Lock
 from typing import Any
 
 from .exceptions import AuditWriteError
-from .models import ArgumentAuditMode, Decision, ToolCall, Usage
+from .models import ArgumentAuditMode, Decision, ToolCall, Usage, bounded
 
 
 class JsonlAuditLog:
@@ -44,9 +44,9 @@ class JsonlAuditLog:
         if argument_mode is ArgumentAuditMode.HASH:
             entry["call_fingerprint"] = call.fingerprint
         elif argument_mode is ArgumentAuditMode.REDACTED:
-            entry["arguments"] = _redact(call.arguments)
+            entry["arguments"] = _redact(bounded(call.arguments))
         elif argument_mode is ArgumentAuditMode.FULL:
-            entry["arguments"] = call.arguments
+            entry["arguments"] = bounded(call.arguments)
 
         line = json.dumps(entry, separators=(",", ":"), sort_keys=True, default=repr)
         try:

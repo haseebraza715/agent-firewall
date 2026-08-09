@@ -66,7 +66,7 @@ def run_checks(
 
     checks.append(
         _check_mcp(mcp_command)
-        if mcp_command
+        if mcp_command is not None
         else DoctorCheck("mcp", True, "not configured")
     )
 
@@ -106,6 +106,8 @@ def _check_parent_writable(name: str, path: Path) -> DoctorCheck:
 
 
 def _check_mcp(command: Sequence[str]) -> DoctorCheck:
+    if not command:
+        return DoctorCheck("mcp", False, "no MCP command given")
     executable = command[0]
     if "/" in executable or os.sep in executable:
         if os.path.isfile(executable) and os.access(executable, os.X_OK):

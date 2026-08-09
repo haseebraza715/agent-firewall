@@ -94,7 +94,7 @@ def read_events(
             for line in handle:
                 try:
                     event = json.loads(line)
-                except json.JSONDecodeError:
+                except (json.JSONDecodeError, ValueError, RecursionError):
                     continue
                 if isinstance(event, dict):
                     events.append(event)
@@ -176,7 +176,7 @@ def _handler(dashboard: Dashboard) -> type[BaseHTTPRequestHandler]:
                     unquote(path[len(prefix) :]),
                     status,
                 )
-            except (json.JSONDecodeError, KeyError, ValueError):
+            except (json.JSONDecodeError, KeyError, ValueError, RecursionError):
                 self._json(400, {"error": "decision must be approved or denied"})
                 return
             except ApprovalNotFound:

@@ -33,6 +33,32 @@ def money(value: Any) -> Decimal:
     return amount
 
 
+_BOUND_DEPTH = 64
+_BOUND_PLACEHOLDER = "<deep>"
+
+
+def bounded(value: Any) -> Any:
+    """Copy a value, replacing subtrees nested deeper than a fixed depth.
+
+    JSON values with pathological nesting make both ``json.loads`` and
+    ``json.dumps`` hit the interpreter recursion limit. Every place that
+    serializes agent-controlled arguments (fingerprints, audit records) runs
+    the value through this first, so a deeply nested tool call cannot crash
+    the process with ``RecursionError``.
+    """
+    return _bounded(value, 0)
+
+
+def _bounded(value: Any, depth: int) -> Any:
+    if depth > _BOUND_DEPTH:
+        return _BOUND_PLACEHOLDER
+    if isinstance(value, dict):
+        return {str(key): _bounded(item, depth + 1) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_bounded(item, depth + 1) for item in value]
+    return value
+
+
 @dataclass(frozen=True)
 class ToolCall:
     name: str
@@ -58,7 +84,7 @@ class ToolCall:
     @property
     def fingerprint(self) -> str:
         payload = json.dumps(
-            {"tool": self.name, "arguments": self.arguments},
+            {"tool": self.name, "arguments": bounded(self.arguments)},
             sort_keys=True,
             separators=(",", ":"),
             ensure_ascii=False,

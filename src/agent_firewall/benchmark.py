@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from .models import DecisionKind, ToolCall, Usage
-from .policy import Policy
+from .policy import Policy, _load_json_strict
 
 ORDER = ("allow", "require_approval", "block")
 
@@ -190,13 +190,17 @@ def _check_min(
 
 def load_cases(path: Path) -> list[BenchmarkCase]:
     try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
+        raw = _load_json_strict(path.read_text(encoding="utf-8"))
     except OSError as exc:
         raise BenchmarkConfigError(f"cannot read benchmark cases: {exc}") from exc
     except json.JSONDecodeError as exc:
         raise BenchmarkConfigError(
             f"invalid JSON in benchmark cases at line {exc.lineno}, column {exc.colno}"
         ) from exc
+    except ValueError as exc:
+        raise BenchmarkConfigError(str(exc)) from exc
+    except RecursionError as exc:
+        raise BenchmarkConfigError("benchmark cases are nested too deeply") from exc
     if not isinstance(raw, list):
         raise BenchmarkConfigError("benchmark cases must be a JSON list")
     if not raw:
@@ -337,13 +341,17 @@ def write_freeze(
 
 def load_freeze(manifest_path: Path) -> dict[str, Any]:
     try:
-        raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+        raw = _load_json_strict(manifest_path.read_text(encoding="utf-8"))
     except OSError as exc:
         raise BenchmarkConfigError(f"cannot read policy freeze: {exc}") from exc
     except json.JSONDecodeError as exc:
         raise BenchmarkConfigError(
             f"invalid JSON in policy freeze at line {exc.lineno}, column {exc.colno}"
         ) from exc
+    except ValueError as exc:
+        raise BenchmarkConfigError(str(exc)) from exc
+    except RecursionError as exc:
+        raise BenchmarkConfigError("policy freeze is nested too deeply") from exc
     if not isinstance(raw, dict):
         raise BenchmarkConfigError("policy freeze must be a JSON object")
     if raw.get("kind") != "policy-freeze":

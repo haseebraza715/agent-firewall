@@ -131,33 +131,42 @@ def _explain_budget(
     checks: list[BudgetCheck] = []
     if budget.max_calls is not None:
         checks.append(
-            _budget_check("max_calls", usage.tool_calls, budget.max_calls, decision)
+            _budget_check(
+                "max_calls",
+                usage.tool_calls,
+                budget.max_calls,
+                usage.tool_calls >= budget.max_calls,
+            )
         )
     if budget.max_calls_per_tool is not None:
+        prior = usage.calls_by_tool.get(call.name, 0)
         checks.append(
             _budget_check(
                 "max_calls_per_tool",
-                usage.calls_by_tool.get(call.name, 0),
+                prior,
                 budget.max_calls_per_tool,
-                decision,
+                prior >= budget.max_calls_per_tool,
             )
         )
     if budget.max_identical_calls is not None:
+        prior = usage.calls_by_fingerprint.get(call.fingerprint, 0)
         checks.append(
             _budget_check(
                 "max_identical_calls",
-                usage.calls_by_fingerprint.get(call.fingerprint, 0),
+                prior,
                 budget.max_identical_calls,
-                decision,
+                prior >= budget.max_identical_calls,
             )
         )
     if budget.max_cost_usd is not None:
+        projected = str(usage.estimated_cost_usd + call.estimated_cost_usd)
         checks.append(
             _budget_check(
                 "max_cost_usd",
-                str(usage.estimated_cost_usd + call.estimated_cost_usd),
+                projected,
                 str(budget.max_cost_usd),
-                decision,
+                usage.estimated_cost_usd + call.estimated_cost_usd
+                > budget.max_cost_usd,
             )
         )
     return BudgetExplanation(
@@ -171,13 +180,13 @@ def _budget_check(
     name: str,
     current: Any,
     limit: Any,
-    decision: Decision | None,
+    triggered: bool,
 ) -> BudgetCheck:
     return BudgetCheck(
         name=name,
         current=str(current),
         limit=str(limit),
-        triggered=decision is not None and decision.code == name,
+        triggered=triggered,
     )
 
 

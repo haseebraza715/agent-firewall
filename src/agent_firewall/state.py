@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlite3
 from contextlib import closing
 from dataclasses import dataclass
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from threading import Lock
 from typing import Protocol
@@ -139,6 +139,12 @@ class SQLiteStateStore:
         row = connection.execute(
             "SELECT tool_calls, estimated_cost_usd FROM run_usage WHERE id = 1"
         ).fetchone()
+        if row is None or not isinstance(row[0], int):
+            raise StorageError("firewall state is missing or corrupted")
+        try:
+            estimated_cost_usd = Decimal(row[1])
+        except (InvalidOperation, TypeError, ValueError) as exc:
+            raise StorageError("firewall state cost record is corrupted") from exc
         tools: dict[str, int] = dict(
             connection.execute("SELECT tool, call_count FROM tool_usage")
         )
@@ -146,8 +152,8 @@ class SQLiteStateStore:
             connection.execute("SELECT fingerprint, call_count FROM fingerprint_usage")
         )
         return Usage(
-            tool_calls=int(row[0]),
-            estimated_cost_usd=Decimal(row[1]),
+            tool_calls=row[0],
+            estimated_cost_usd=estimated_cost_usd,
             calls_by_tool=tools,
             calls_by_fingerprint=fingerprints,
         )
