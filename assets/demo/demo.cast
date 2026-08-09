@@ -1,0 +1,12 @@
+{"version": 2, "width": 100, "height": 30, "timestamp": 1786275864, "env": {"SHELL": "/bin/zsh", "TERM": "xterm-256color"}, "title": "Agent Firewall: allow, hold, block"}
+[0.014113, "o", "\u001b[1;36mAgent Firewall: every tool call gets a decision before it runs\u001b[0m\r\n"]
+[1.33413, "o", "\u001b[1;32m❯\u001b[0m agent-firewall policy lint --policy examples/demo_policy.json\r\n"]
+[2.325619, "o", "policy lint: examples/demo_policy.json: no findings\r\n"]
+[6.94208, "o", "\u001b[1;36mOne policy, three decisions: allow, require_approval, block\u001b[0m\r\n"]
+[8.264164, "o", "\u001b[1;32m❯\u001b[0m agent-firewall check --policy examples/demo_policy.json \\\r\n  --tool database.query --arguments '{\"query\":\"SELECT * FROM users\"}' --format text\r\n"]
+[9.24535, "o", "allow             database.query\r\n                  read-only queries are allowed (rule 0)\r\n"]
+[13.867425, "o", "\u001b[1;32m❯\u001b[0m agent-firewall check --policy examples/demo_policy.json \\\r\n  --tool email.send --arguments '{\"to\":\"customer@example.com\"}' --format text\r\n"]
+[14.85285, "o", "require_approval  email.send\r\n                  outbound email needs a human decision (rule 2)\r\n"]
+[19.468391, "o", "\u001b[1;32m❯\u001b[0m agent-firewall check --policy examples/demo_policy.json \\\r\n  --tool browser.navigate --arguments '{\"url\":\"http://169.254.169.254/\"}' --format text\r\n"]
+[20.446456, "o", "block             browser.navigate\r\n                  browser navigation is blocked (rule 3)\r\n"]
+[25.062955, "o", "\u001b[1;36mEvery decision carries its policy reason. Fail closed: no rule, no run.\u001b[0m\r\n"]
