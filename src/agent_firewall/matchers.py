@@ -16,8 +16,10 @@ Supported matchers and their fields:
     deny_private_networks  bool          only public literal IPs match
 
     ``deny_private_networks`` classifies the hostname only when it is a
-    literal IPv4 or IPv6 address. DNS resolution and HTTP redirects are never
-    inspected, and a non-IP hostname is not denied.
+    literal IPv4 or IPv6 address (including legacy encodings such as
+    ``127.1``, ``2130706433``, and leading zeros, and IPv6 zone ids). DNS
+    resolution and HTTP redirects are never inspected, and a non-IP
+    hostname is not denied.
 
 ``path``
     within              str              lexical absolute containment
@@ -56,12 +58,21 @@ from __future__ import annotations
 
 import ipaddress
 import posixpath
+import re
 import shlex
 from collections.abc import Callable
 from decimal import Decimal, InvalidOperation
-from fnmatch import fnmatchcase
+from fnmatch import translate
+from functools import lru_cache
 from typing import Any
 from urllib.parse import urlsplit
+
+try:
+    import socket as _socket
+
+    _inet_aton: Callable[[str], bytes] | None = _socket.inet_aton
+except (ImportError, AttributeError):  # pragma: no cover - platform dependent
+    _inet_aton = None
 
 OPERATORS = frozenset(
     ("url", "path", "domain", "http_method", "number", "sql", "command")
@@ -80,6 +91,16 @@ NUMBER_FIELDS = frozenset(("operator", "min", "max"))
 SQL_FIELDS = frozenset(("operator", "equals", "in"))
 COMMAND_FIELDS = frozenset(("operator", "executable", "argv_prefix"))
 PATH_OPERATOR_FIELDS = frozenset(("equals", "prefix", "suffix"))
+
+
+@lru_cache(maxsize=2048)
+def _glob_regex(pattern: str) -> re.Pattern[str]:
+    return re.compile(translate(pattern))
+
+
+def glob_match(pattern: str, value: str) -> bool:
+    """Case-sensitive glob equality, with the pattern compiled once."""
+    return _glob_regex(pattern).fullmatch(value) is not None
 
 
 def is_typed(pattern: Any) -> bool:
@@ -195,7 +216,7 @@ def _validate_path_operator(value: Any, where: str) -> None:
             f"{where} must be an object with one of: equals, prefix, suffix"
         )
     _validate(value, where, PATH_OPERATOR_FIELDS)
-    present = [key for key in value if key != "operator"]
+    present = list(value)
     if len(present) != 1:
         raise ValueError(f"{where} must have exactly one of: equals, prefix, suffix")
     _non_empty_string(value[present[0]], f"{where}.{present[0]}")
@@ -313,7 +334,7 @@ def _match_url(pattern: dict[str, Any], value: Any) -> bool:
 
 def _match_string_list(patterns: Any, actual: str) -> bool:
     return any(
-        fnmatchcase(actual, item.lower()) for item in _normalized_strings(patterns)
+        glob_match(item.lower(), actual) for item in _normalized_strings(patterns)
     )
 
 
@@ -354,15 +375,39 @@ def _is_private_literal(hostname: str | None) -> bool:
     """True when hostname is a literal IP that is not globally routable.
 
     DNS resolution and redirects are deliberately not inspected: a hostname
-    that is not a literal IP is never classified.
+    that is not a literal IP is never classified. Legacy IPv4 encodings that
+    common resolvers still accept (``127.1``, ``2130706433``, ``0x7f000001``,
+    leading zeros) and IPv6 zone ids are classified as well, so the private
+    networks gate cannot be sidestepped by rewriting the address.
     """
     if hostname is None:
         return False
-    try:
-        address = ipaddress.ip_address(hostname)
-    except ValueError:
+    hostname = hostname.split("%", 1)[0]
+    address = _as_ip_address(hostname)
+    if address is None:
         return False
     return not address.is_global
+
+
+def _as_ip_address(
+    hostname: str,
+) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
+    try:
+        parsed = ipaddress.ip_address(hostname)
+    except ValueError:
+        parsed = None
+    if parsed is not None:
+        return parsed
+    if _inet_aton is None:
+        return None
+    if hostname.isdigit() and len(hostname) > 10:
+        # A pure decimal token of 11+ digits wraps inside inet_aton; real
+        # resolvers would treat it as a DNS name, so leave it unclassified.
+        return None
+    try:
+        return ipaddress.ip_address(_inet_aton(hostname))
+    except OSError:
+        return None
 
 
 def _match_path(pattern: dict[str, Any], value: Any) -> bool:
@@ -505,7 +550,7 @@ def _match_command(pattern: dict[str, Any], value: Any) -> bool:
         if len(argv) < len(prefix):
             return False
         for actual, expected in zip(argv, prefix):
-            if not fnmatchcase(actual, expected):
+            if not glob_match(expected, actual):
                 return False
     return True
 
@@ -536,9 +581,9 @@ def _is_shell_control(token: str) -> bool:
 
 
 def _command_executable_matches(pattern: str, argv0: str) -> bool:
-    if fnmatchcase(argv0, pattern):
+    if glob_match(pattern, argv0):
         return True
-    return fnmatchcase(posixpath.basename(argv0), pattern)
+    return glob_match(pattern, posixpath.basename(argv0))
 
 
 _VALIDATORS: dict[str, ValidatorFn] = {
