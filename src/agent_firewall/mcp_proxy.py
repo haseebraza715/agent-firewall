@@ -21,6 +21,8 @@ DUPLICATE_ID_ERROR = -32600
 INVALID_PARAMS_ERROR = -32602
 REQUEST_TIMEOUT_ERROR = -32002
 CHILD_UNAVAILABLE_ERROR = -32003
+PARSE_ERROR = -32700
+DEFAULT_MAX_LINE_BYTES = 64 * 1024 * 1024
 
 
 class McpRequestTimeoutError(TimeoutError):
@@ -42,9 +44,72 @@ def _is_batch(line: bytes) -> bool:
         return False
     try:
         value = json.loads(line)
-    except (UnicodeDecodeError, json.JSONDecodeError):
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError):
         return False
     return isinstance(value, list)
+
+
+def _read_line(stream: Any, limit: int) -> tuple[bytes, bool]:
+    """Read one newline-terminated line, bounding the memory it can use.
+
+    Returns ``(line, oversized)``. When oversized, the remainder of the
+    oversized line is drained so the stream stays frame-aligned and the
+    caller can reject the request without losing the messages that follow.
+    """
+    line = stream.readline(limit + 1)
+    if len(line) <= limit:
+        return line, False
+    while line and not line.endswith(b"\n"):
+        chunk = stream.readline(65536)
+        if not chunk:
+            break
+        line = chunk
+    return b"", True
+
+
+async def _read_child_line(
+    stream: asyncio.StreamReader,
+    limit: int,
+    remainder: bytearray,
+) -> tuple[bytes, bool, bytearray]:
+    """Bounded ``StreamReader`` twin of ``_read_line`` for child responses.
+
+    ``StreamReader.read`` consumes what it returns, so a chunk can hold
+    several newline-terminated lines. Bytes after the first newline are
+    returned as ``remainder`` and prepended to the next call's line instead
+    of being lost; the same applies while draining an oversized line.
+    """
+    line = bytearray()
+    if remainder:
+        line.extend(remainder)
+        remainder.clear()
+        newline_index = line.find(b"\n")
+        if newline_index != -1:
+            line_end = newline_index + 1
+            if len(line) > limit:
+                return b"", True, bytearray(line[line_end:])
+            return bytes(line[:line_end]), False, bytearray(line[line_end:])
+    while True:
+        if len(line) > limit:
+            drain = await stream.read(65536)
+            if not drain:
+                return b"", True, bytearray()
+            newline_index = drain.find(b"\n")
+            if newline_index != -1:
+                return b"", True, bytearray(drain[newline_index + 1 :])
+            continue
+        chunk = await stream.read(limit + 1 - len(line))
+        if not chunk:
+            if len(line) > limit:
+                return b"", True, bytearray()
+            return bytes(line), False, bytearray()
+        newline_index = chunk.find(b"\n")
+        if newline_index != -1:
+            line.extend(chunk[: newline_index + 1])
+            if len(line) > limit:
+                return b"", True, bytearray(chunk[newline_index + 1 :])
+            return bytes(line), False, bytearray(chunk[newline_index + 1 :])
+        line.extend(chunk)
 
 
 class TerminalApprover:
@@ -73,6 +138,7 @@ class McpStdioProxy:
         firewall: Firewall,
         command: Sequence[str],
         request_timeout: float = 300,
+        max_line_bytes: int = DEFAULT_MAX_LINE_BYTES,
     ) -> None:
         if command and command[0] == "--":
             command = command[1:]
@@ -80,9 +146,12 @@ class McpStdioProxy:
             raise ValueError("MCP server command is required after --")
         if request_timeout <= 0:
             raise ValueError("request timeout must be positive")
+        if max_line_bytes <= 0:
+            raise ValueError("max line bytes must be positive")
         self.firewall = firewall
         self.command = list(command)
         self.request_timeout = request_timeout
+        self.max_line_bytes = max_line_bytes
         self.process: asyncio.subprocess.Process | None = None
         self.pending: dict[str, asyncio.Future[Mapping[str, Any]]] = {}
         self._client_pending: set[str] = set()
@@ -104,7 +173,12 @@ class McpStdioProxy:
         requests: list[asyncio.Task[None]] = []
         try:
             while True:
-                line = await asyncio.to_thread(sys.stdin.buffer.readline)
+                line, oversized = await asyncio.to_thread(
+                    _read_line, sys.stdin.buffer, self.max_line_bytes
+                )
+                if oversized:
+                    self._write_client(self._parse_error_response("request too large"))
+                    continue
                 if not line:
                     break
                 task = asyncio.create_task(self._handle_client_line(line))
@@ -122,15 +196,23 @@ class McpStdioProxy:
         return await self.process.wait()
 
     async def _handle_client_line(self, line: bytes) -> None:
-        message = decode_message(line)
+        try:
+            message = decode_message(line)
+        except ValueError:
+            self._write_client(self._parse_error_response("message too deeply nested"))
+            return
         if message is None:
             if _is_batch(line):
                 self._reject_batch(line)
                 return
-            try:
-                await self._write_child_with_timeout(line)
-            except (McpRequestTimeoutError, McpChildUnavailableError):
-                pass
+            if not line.strip():
+                return
+            # Undecodable or non-object lines are never forwarded: a lenient
+            # wrapped server might salvage a tools/call out of them, so they
+            # are rejected here instead of bypassing the policy.
+            self._write_client(
+                self._parse_error_response("invalid JSON-RPC message")
+            )
             return
 
         if message.get("method") != "tools/call":
@@ -222,11 +304,19 @@ class McpStdioProxy:
             }
         )
 
+    @staticmethod
+    def _parse_error_response(text: str) -> Mapping[str, Any]:
+        return {
+            "jsonrpc": "2.0",
+            "id": None,
+            "error": {"code": PARSE_ERROR, "message": text},
+        }
+
     def _reject_batch(self, line: bytes) -> None:
         """Answer every batch element that carries an id; never forward it."""
         try:
             batch = json.loads(line)
-        except (UnicodeDecodeError, json.JSONDecodeError):
+        except (UnicodeDecodeError, json.JSONDecodeError, RecursionError):
             return
         if not isinstance(batch, list):
             return
@@ -356,12 +446,20 @@ class McpStdioProxy:
     async def _read_child(self) -> None:
         assert self.process is not None
         assert self.process.stdout is not None
+        remainder = bytearray()
         try:
             while True:
-                line = await self.process.stdout.readline()
+                line, oversized, remainder = await _read_child_line(
+                    self.process.stdout, self.max_line_bytes, remainder
+                )
+                if oversized:
+                    continue
                 if not line:
                     break
-                message = decode_message(line)
+                try:
+                    message = decode_message(line)
+                except ValueError:
+                    continue
                 if message is None or "method" in message or "id" not in message:
                     self._write_client_bytes(line)
                     continue
@@ -434,12 +532,31 @@ class McpStdioProxy:
 
     @staticmethod
     def _write_client(message: Mapping[str, Any]) -> None:
-        McpStdioProxy._write_client_bytes(encode_message(message))
+        try:
+            McpStdioProxy._write_client_bytes(encode_message(message))
+        except ValueError:
+            fallback = {
+                "jsonrpc": "2.0",
+                "id": message.get("id"),
+                "error": {
+                    "code": PARSE_ERROR,
+                    "message": "response too deeply nested to encode",
+                },
+            }
+            try:
+                McpStdioProxy._write_client_bytes(encode_message(fallback))
+            except ValueError:
+                pass
 
     @staticmethod
     def _write_client_bytes(line: bytes) -> None:
-        sys.stdout.buffer.write(line)
-        sys.stdout.buffer.flush()
+        try:
+            sys.stdout.buffer.write(line)
+            sys.stdout.buffer.flush()
+        except OSError:
+            # The client closed its side; the proxy keeps draining stdin so
+            # the wrapped child shuts down cleanly.
+            pass
 
 
 async def run_mcp_proxy(
@@ -451,6 +568,7 @@ async def run_mcp_proxy(
     approve_web: bool = False,
     approval_timeout: float = 300,
     request_timeout: float = 300,
+    max_line_bytes: int = DEFAULT_MAX_LINE_BYTES,
 ) -> int:
     if approve_terminal and approve_web:
         raise ValueError("choose either terminal or web approval")
@@ -477,6 +595,7 @@ async def run_mcp_proxy(
         firewall,
         command,
         request_timeout=request_timeout,
+        max_line_bytes=max_line_bytes,
     ).run()
 
 

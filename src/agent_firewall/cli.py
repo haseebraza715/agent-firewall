@@ -205,6 +205,13 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="SECONDS",
         help="fail closed when the wrapped MCP server takes longer than this",
     )
+    mcp.add_argument(
+        "--max-line-bytes",
+        type=_positive_int,
+        default=64 * 1024 * 1024,
+        metavar="BYTES",
+        help="reject JSON-RPC lines larger than this (default 67108864)",
+    )
     mcp.add_argument("server_command", nargs=argparse.REMAINDER)
 
     dashboard = commands.add_parser(
@@ -237,6 +244,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     approve_web=args.approve_web,
                     approval_timeout=args.approval_timeout,
                     request_timeout=args.request_timeout,
+                    max_line_bytes=args.max_line_bytes,
                 )
             )
         if args.command == "benchmark":
@@ -260,10 +268,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 def _check(args: argparse.Namespace) -> int:
-    arguments = json.loads(args.arguments)
-    if not isinstance(arguments, dict):
-        raise ValueError("--arguments must decode to a JSON object")
-
+    arguments = _parse_json_object(args.arguments, "--arguments")
     policy = Policy.load(args.policy)
     call = ToolCall.create(args.tool, arguments, args.cost)
     decision = policy.evaluate(call, Usage())
@@ -276,7 +281,10 @@ def _check(args: argparse.Namespace) -> int:
 
 def _replay(args: argparse.Namespace) -> int:
     policy = Policy.load(args.policy)
-    scenarios = json.loads(args.scenarios.read_text(encoding="utf-8"))
+    try:
+        scenarios = json.loads(args.scenarios.read_text(encoding="utf-8"))
+    except RecursionError as exc:
+        raise ValueError("scenario file is nested too deeply") from exc
     if not isinstance(scenarios, list):
         raise ValueError("scenario file must contain a JSON list")
 
@@ -354,10 +362,7 @@ def _policy_lint(args: argparse.Namespace) -> int:
 
 
 def _policy_explain(args: argparse.Namespace) -> int:
-    arguments = json.loads(args.arguments)
-    if not isinstance(arguments, dict):
-        raise ValueError("--arguments must decode to a JSON object")
-
+    arguments = _parse_json_object(args.arguments, "--arguments")
     policy = Policy.load(args.policy)
     call = ToolCall.create(args.tool, arguments, args.cost)
     explanation = explain_module.explain_call(policy, call, Usage())
@@ -390,6 +395,26 @@ def _rate_threshold(value: str) -> float:
     if not 0.0 <= number <= 1.0:
         raise argparse.ArgumentTypeError("threshold must be between 0 and 1 inclusive")
     return number
+
+
+def _positive_int(value: str) -> int:
+    try:
+        number = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"{value!r} is not an integer") from exc
+    if number <= 0:
+        raise argparse.ArgumentTypeError("value must be a positive integer")
+    return number
+
+
+def _parse_json_object(text: str, flag: str) -> dict[str, Any]:
+    try:
+        value = json.loads(text)
+    except RecursionError as exc:
+        raise ValueError(f"{flag} is nested too deeply") from exc
+    if not isinstance(value, dict):
+        raise ValueError(f"{flag} must decode to a JSON object")
+    return value
 
 
 def _positive_timeout(value: str) -> float:
