@@ -12,10 +12,48 @@ from agent_firewall.doctor import (
 )
 
 
-def _write_policy(root, body='{"default_decision": "block"}'):
+def _write_policy(root, body=None):
+    if body is None:
+        body = '{"default_decision": "block", "budget": {"max_calls": 100}}'
     path = Path(root) / "policy.json"
     path.write_text(body, encoding="utf-8")
     return path
+
+
+class DoctorLintTests(unittest.TestCase):
+    def test_error_findings_fail_the_lint_check(self):
+        with tempfile.TemporaryDirectory() as directory:
+            policy = _write_policy(directory, '{"default_decision": "allow"}')
+            checks = run_checks(policy)
+            by_name = {check.name: check for check in checks}
+            self.assertFalse(by_name["policy_lint"].ok)
+            self.assertIn("permissive_default", by_name["policy_lint"].message)
+
+    def test_clean_policy_passes_the_lint_check(self):
+        with tempfile.TemporaryDirectory() as directory:
+            policy = _write_policy(directory)
+            checks = run_checks(policy)
+            by_name = {check.name: check for check in checks}
+            self.assertTrue(by_name["policy_lint"].ok)
+            self.assertEqual(by_name["policy_lint"].message, "no lint findings")
+
+    def test_warning_findings_report_codes_without_failing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            policy = _write_policy(
+                directory,
+                '{"default_decision": "block", "budget": {"max_calls": 100},'
+                ' "rules": [{"tool": "*", "decision": "allow"}]}',
+            )
+            checks = run_checks(policy)
+            by_name = {check.name: check for check in checks}
+            self.assertTrue(by_name["policy_lint"].ok)
+            self.assertIn("broad_allow_all", by_name["policy_lint"].message)
+
+    def test_unloadable_policy_skips_lint_check(self):
+        with tempfile.TemporaryDirectory() as directory:
+            policy = _write_policy(directory, "not json")
+            checks = run_checks(policy)
+            self.assertNotIn("policy_lint", {check.name for check in checks})
 
 
 class DoctorTests(unittest.TestCase):
@@ -108,18 +146,18 @@ class DoctorTests(unittest.TestCase):
 
         text = render_text(checks)
         self.assertIn("agent-firewall doctor", text)
-        self.assertIn("all 6 check(s) passed", text)
+        self.assertIn("all 7 check(s) passed", text)
         self.assertEqual(to_dict(checks)["all_ok"], True)
-        self.assertEqual(len(to_dict(checks)["checks"]), 6)
+        self.assertEqual(len(to_dict(checks)["checks"]), 7)
 
     def test_failed_checks_drive_render_and_json_counts(self):
         with tempfile.TemporaryDirectory() as directory:
             policy = _write_policy(directory, '{"default_decision": "allow"}')
             checks = run_checks(policy)
 
-        self.assertIn("1 of 6 check(s) failed", render_text(checks))
+        self.assertIn("2 of 7 check(s) failed", render_text(checks))
         data = to_dict(checks)
-        self.assertEqual(data["failed_checks"], 1)
+        self.assertEqual(data["failed_checks"], 2)
         self.assertFalse(data["all_ok"])
 
 

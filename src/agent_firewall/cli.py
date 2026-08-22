@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import math
 import re
 import sys
 from collections.abc import Sequence
@@ -197,10 +198,16 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="wait for decisions from the localhost dashboard",
     )
-    mcp.add_argument("--approval-timeout", type=float, default=300)
+    mcp.add_argument(
+        "--approval-timeout",
+        type=_finite_positive_float,
+        default=300,
+        metavar="SECONDS",
+        help="deny held calls still undecided after this many seconds",
+    )
     mcp.add_argument(
         "--request-timeout",
-        type=_positive_timeout,
+        type=_finite_positive_float,
         default=300,
         metavar="SECONDS",
         help="fail closed when the wrapped MCP server takes longer than this",
@@ -222,7 +229,7 @@ def build_parser() -> argparse.ArgumentParser:
     dashboard.add_argument("--audit", type=Path, required=True)
     dashboard.add_argument("--state", type=Path, required=True)
     dashboard.add_argument("--host", default="127.0.0.1")
-    dashboard.add_argument("--port", type=int, default=8787)
+    dashboard.add_argument("--port", type=_port, default=8787)
     return parser
 
 
@@ -417,13 +424,23 @@ def _parse_json_object(text: str, flag: str) -> dict[str, Any]:
     return value
 
 
-def _positive_timeout(value: str) -> float:
+def _finite_positive_float(value: str) -> float:
     try:
         number = float(value)
     except ValueError as exc:
         raise argparse.ArgumentTypeError(f"{value!r} is not a number") from exc
-    if number <= 0:
-        raise argparse.ArgumentTypeError("request timeout must be positive")
+    if not math.isfinite(number) or number <= 0:
+        raise argparse.ArgumentTypeError("must be a finite positive number")
+    return number
+
+
+def _port(value: str) -> int:
+    try:
+        number = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"{value!r} is not an integer") from exc
+    if not 0 <= number <= 65535:
+        raise argparse.ArgumentTypeError("port must be between 0 and 65535")
     return number
 
 
@@ -480,16 +497,27 @@ def _run_scenario(policy: Policy, scenario: Any) -> dict[str, Any]:
         raise ValueError(f"{scenario_id}: calls and expected_decisions must be lists")
     if len(calls) != len(expected):
         raise ValueError(f"{scenario_id}: each call needs an expected decision")
+    title = scenario.get("title")
+    if title is not None and not isinstance(title, str):
+        raise ValueError(f"{scenario_id}: title must be a string")
+    source_url = scenario.get("source_url")
+    if source_url is not None and not isinstance(source_url, str):
+        raise ValueError(f"{scenario_id}: source_url must be a string")
 
     usage = Usage()
     actual: list[str] = []
     for index, raw_call in enumerate(calls):
         if not isinstance(raw_call, dict):
             raise ValueError(f"{scenario_id}: calls[{index}] must be an object")
+        raw_arguments = raw_call.get("arguments")
+        if raw_arguments is not None and not isinstance(raw_arguments, dict):
+            raise ValueError(
+                f"{scenario_id}: calls[{index}]: arguments must be an object"
+            )
         try:
             call = ToolCall.create(
                 raw_call.get("tool"),
-                raw_call.get("arguments"),
+                raw_arguments,
                 raw_call.get("estimated_cost_usd", 0),
             )
         except ValueError as exc:

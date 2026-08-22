@@ -127,5 +127,23 @@ class ApprovalQueueTests(unittest.TestCase):
         self.fail("approval did not become pending")
 
 
+class QueueValidationTests(unittest.TestCase):
+    def test_non_finite_timeouts_are_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "state.db"
+            for timeout in (float("nan"), float("inf"), 0, -1):
+                with self.subTest(timeout=timeout):
+                    with self.assertRaises(ValueError):
+                        SQLiteApprovalQueue(path, timeout_seconds=timeout)
+
+    def test_non_finite_poll_intervals_are_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "state.db"
+            for poll in (float("nan"), float("inf"), 0, -0.5):
+                with self.subTest(poll=poll):
+                    with self.assertRaises(ValueError):
+                        SQLiteApprovalQueue(path, poll_seconds=poll)
+
+
 if __name__ == "__main__":
     unittest.main()

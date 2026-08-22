@@ -8,7 +8,7 @@ covered when coverage is measured in the test process.
 import asyncio
 import json
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from agent_firewall import Firewall, Policy
 from agent_firewall.jsonrpc import encode_message, request_key
@@ -109,6 +109,24 @@ class InProcessProxyTests(unittest.TestCase):
         )
         self.assertEqual(written["error"]["code"], -32602)
 
+    def test_over_cap_cost_is_rejected_as_params_error(self):
+        proxy = _proxy({"default_decision": "allow"})
+        written = _call(
+            proxy,
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {
+                    "name": "demo.tool",
+                    "arguments": {},
+                    "_meta": {"estimated_cost_usd": "1e300"},
+                },
+            },
+        )
+        self.assertEqual(written["error"]["code"], -32602)
+        self.assertIn("estimated_cost_usd", written["error"]["message"])
+
     def test_negative_cost_rejects_call(self):
         proxy = _proxy({"default_decision": "allow"})
         written = _call(
@@ -162,6 +180,22 @@ class InProcessProxyTests(unittest.TestCase):
         with patch.object(proxy, "_write_client", side_effect=record):
             asyncio.run(proxy._handle_client_line(deep))
         self.assertEqual(written["value"]["error"]["code"], -32700)
+
+    def test_duplicate_key_line_names_the_reason(self):
+        proxy = _proxy({"default_decision": "allow"})
+        written = {}
+
+        def record(value):
+            written["value"] = value
+
+        line = (
+            b'{"jsonrpc":"2.0","id":6,"method":"tools/call",'
+            b'"params":{"name":"t","a":1,"a":2}}\n'
+        )
+        with patch.object(proxy, "_write_client", side_effect=record):
+            asyncio.run(proxy._handle_client_line(line))
+        self.assertEqual(written["value"]["error"]["code"], -32700)
+        self.assertIn("duplicate key", written["value"]["error"]["message"])
 
     def test_blank_line_is_ignored(self):
         proxy = _proxy({"default_decision": "allow"})
@@ -285,6 +319,110 @@ class InProcessProxyTests(unittest.TestCase):
             McpStdioProxy(_proxy({}), ["echo"], request_timeout=0)
         with self.assertRaisesRegex(ValueError, "max line bytes"):
             McpStdioProxy(_proxy({}), ["echo"], max_line_bytes=0)
+
+
+class TruthfulProxyErrorTests(unittest.TestCase):
+    def test_non_object_arguments_are_rejected_not_forwarded(self):
+        proxy = _proxy({"default_decision": "allow"})
+        written = _call(
+            proxy,
+            {
+                "jsonrpc": "2.0",
+                "id": 7,
+                "method": "tools/call",
+                "params": {"name": "demo.tool", "arguments": ["raw"]},
+            },
+        )
+        self.assertEqual(written["error"]["code"], -32602)
+        self.assertIn("arguments", written["error"]["message"])
+
+    def test_null_arguments_are_rejected_not_evaluated_empty(self):
+        proxy = _proxy({"default_decision": "allow"})
+        written = _call(
+            proxy,
+            {
+                "jsonrpc": "2.0",
+                "id": 8,
+                "method": "tools/call",
+                "params": {"name": "demo.tool", "arguments": None},
+            },
+        )
+        self.assertEqual(written["error"]["code"], -32602)
+
+    def test_held_call_without_approver_reports_hold_not_block(self):
+        proxy = _proxy(
+            {
+                "default_decision": "block",
+                "rules": [{"tool": "email.send", "decision": "require_approval"}],
+            }
+        )
+        written = _call(
+            proxy,
+            {
+                "jsonrpc": "2.0",
+                "id": 9,
+                "method": "tools/call",
+                "params": {"name": "email.send", "arguments": {}},
+            },
+        )
+        self.assertEqual(written["error"]["code"], -32001)
+        self.assertIn("approval", written["error"]["message"].lower())
+        self.assertEqual(written["error"]["data"]["decision"], "require_approval")
+
+    def test_policy_block_still_reports_blocked(self):
+        proxy = _proxy({"default_decision": "block"})
+        written = _call(
+            proxy,
+            {
+                "jsonrpc": "2.0",
+                "id": 10,
+                "method": "tools/call",
+                "params": {"name": "evil.tool", "arguments": {}},
+            },
+        )
+        self.assertEqual(written["error"]["code"], -32001)
+        self.assertIn("blocked", written["error"]["message"].lower())
+
+    def test_post_execution_audit_failure_never_claims_not_executed(self):
+        from agent_firewall.exceptions import AuditWriteError
+
+        proxy = _proxy({"default_decision": "allow"})
+        proxy.firewall = AsyncMock(spec=proxy.firewall)
+        proxy.firewall.acall_with_arguments.side_effect = AuditWriteError(
+            "audit disk full", after_execution=True
+        )
+        written = _call(
+            proxy,
+            {
+                "jsonrpc": "2.0",
+                "id": 11,
+                "method": "tools/call",
+                "params": {"name": "demo.tool", "arguments": {}},
+            },
+        )
+        self.assertEqual(written["error"]["code"], -32603)
+        self.assertIn("ran or was attempted", written["error"]["message"])
+        self.assertNotIn("call not executed", written["error"]["message"])
+
+    def test_pre_execution_audit_failure_says_not_executed(self):
+        from agent_firewall.exceptions import AuditWriteError
+
+        proxy = _proxy({"default_decision": "allow"})
+        proxy.firewall = AsyncMock(spec=proxy.firewall)
+        proxy.firewall.acall_with_arguments.side_effect = AuditWriteError(
+            "audit disk full"
+        )
+        written = _call(
+            proxy,
+            {
+                "jsonrpc": "2.0",
+                "id": 12,
+                "method": "tools/call",
+                "params": {"name": "demo.tool", "arguments": {}},
+            },
+        )
+        self.assertEqual(written["error"]["code"], -32603)
+        self.assertIn("not executed", written["error"]["message"])
 
 
 if __name__ == "__main__":

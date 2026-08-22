@@ -11,14 +11,15 @@ from pathlib import Path
 from typing import Any
 
 from .approvals import SQLiteApprovalQueue
-from .exceptions import FirewallError
+from .exceptions import ApprovalRequired, AuditWriteError, FirewallError
 from .firewall import Approver, Firewall
 from .jsonrpc import decode_message, encode_message, request_key
-from .models import Decision, ToolCall, money
+from .models import MAX_CALL_COST_USD, Decision, ToolCall, money
 
 POLICY_ERROR = -32001
 DUPLICATE_ID_ERROR = -32600
 INVALID_PARAMS_ERROR = -32602
+INTERNAL_ERROR = -32603
 REQUEST_TIMEOUT_ERROR = -32002
 CHILD_UNAVAILABLE_ERROR = -32003
 PARSE_ERROR = -32700
@@ -198,8 +199,10 @@ class McpStdioProxy:
     async def _handle_client_line(self, line: bytes) -> None:
         try:
             message = decode_message(line)
-        except ValueError:
-            self._write_client(self._parse_error_response("message too deeply nested"))
+        except ValueError as exc:
+            self._write_client(
+                self._parse_error_response(f"invalid JSON-RPC message: {exc}")
+            )
             return
         if message is None:
             if _is_batch(line):
@@ -225,17 +228,23 @@ class McpStdioProxy:
         params = message.get("params")
         tool_name = params.get("name") if isinstance(params, dict) else None
         if not isinstance(tool_name, str) or not tool_name.strip():
-            self._reject(message, "tools/call requires a string tool name")
+            self._write_error(
+                message, INVALID_PARAMS_ERROR, "tools/call requires a string tool name"
+            )
             return
         assert isinstance(params, dict)
         arguments = params.get("arguments", {})
         if not isinstance(arguments, dict):
-            arguments = {}
+            self._write_error(
+                message, INVALID_PARAMS_ERROR, "tools/call arguments must be an object"
+            )
+            return
         try:
             estimated_cost_usd = _extract_cost(params.get("_meta"))
         except ValueError:
-            self._reject(
+            self._write_error(
                 message,
+                INVALID_PARAMS_ERROR,
                 "params._meta.estimated_cost_usd must be a non-negative finite number",
             )
             return
@@ -260,6 +269,10 @@ class McpStdioProxy:
                 estimated_cost_usd=estimated_cost_usd,
             )
         except FirewallError as exc:
+            if isinstance(exc, ApprovalRequired):
+                text = "tool call requires approval but no approver is configured"
+            else:
+                text = "Tool call blocked by Agent Firewall"
             if "id" in message:
                 self._write_client(
                     {
@@ -267,7 +280,7 @@ class McpStdioProxy:
                         "id": message["id"],
                         "error": {
                             "code": POLICY_ERROR,
-                            "message": "Tool call blocked by Agent Firewall",
+                            "message": text,
                             "data": exc.decision.as_dict(),
                         },
                     }
@@ -281,8 +294,19 @@ class McpStdioProxy:
             if "id" in message:
                 self._write_client(self._child_unavailable_response(message["id"]))
             return
+        except AuditWriteError as exc:
+            self._write_error(
+                message,
+                INTERNAL_ERROR,
+                ("tool ran or was attempted but its audit record could not be written")
+                if exc.after_execution
+                else "internal firewall error; call not executed",
+            )
+            return
         except Exception:
-            self._reject(message, "internal firewall error; call not executed")
+            self._write_error(
+                message, INTERNAL_ERROR, "internal firewall error; call not executed"
+            )
             return
         finally:
             if client_key is not None:
@@ -291,14 +315,19 @@ class McpStdioProxy:
         if response is not None:
             self._write_client(response)
 
-    def _reject(self, message: Mapping[str, Any], text: str) -> None:
+    def _write_error(
+        self,
+        message: Mapping[str, Any],
+        code: int,
+        text: str,
+    ) -> None:
         if "id" not in message:
             return
         self._write_client(
             {
                 "jsonrpc": "2.0",
                 "id": message["id"],
-                "error": {"code": INVALID_PARAMS_ERROR, "message": text},
+                "error": {"code": code, "message": text},
             }
         )
 
@@ -602,10 +631,10 @@ def _extract_cost(meta: Any) -> Decimal:
 
     An absent ``_meta``, a non-dict ``_meta``, or a ``_meta`` without an
     ``estimated_cost_usd`` key all mean zero cost. A present value must be a
-    non-negative finite decimal; anything else raises ``ValueError`` so the
-    caller can reject the call fail-closed instead of executing it with an
-    ambiguous cost.
+    non-negative finite decimal within the supported per-call range; anything
+    else raises ``ValueError`` so the caller can reject the call fail-closed
+    instead of executing it with an ambiguous cost.
     """
     if not isinstance(meta, dict) or "estimated_cost_usd" not in meta:
         return Decimal("0")
-    return money(meta["estimated_cost_usd"])
+    return money(meta["estimated_cost_usd"], max_value=MAX_CALL_COST_USD)

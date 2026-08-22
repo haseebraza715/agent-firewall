@@ -2,6 +2,7 @@ import asyncio
 import json
 import tempfile
 import unittest
+import warnings
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -310,6 +311,116 @@ class AsyncArgumentBindingTests(unittest.IsolatedAsyncioTestCase):
             await firewall.acall(
                 "demo.tool", navigate, "http://169.254.169.254/latest/"
             )
+
+
+class SyncPathAwaitableToolTests(unittest.TestCase):
+    """A sync call must never execute or claim execution of an async tool."""
+
+    class AsyncCallableTool:
+        def __init__(self):
+            self.ran = []
+
+        async def __call__(self, value):
+            self.ran.append(value)
+            return value
+
+    def test_callable_object_with_async_call_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            audit_path = Path(directory) / "audit.jsonl"
+            firewall = Firewall(
+                policy_with_rule("allow"),
+                audit_log=JsonlAuditLog(audit_path),
+            )
+            tool = self.AsyncCallableTool()
+
+            with self.assertRaises(TypeError):
+                firewall.call("demo.tool", tool, "x")
+
+            self.assertEqual(tool.ran, [])
+            events = [
+                json.loads(line)["event"]
+                for line in audit_path.read_text().splitlines()
+            ]
+            self.assertIn("failed", events)
+            self.assertNotIn("executed", events)
+
+    def test_sync_function_returning_awaitable_is_rejected(self):
+        executed = []
+        firewall = Firewall(policy_with_rule("allow"))
+
+        async def background():
+            executed.append(True)
+            return "done"
+
+        def sync_tool():
+            return background()
+
+        with self.assertRaises(TypeError):
+            firewall.call("demo.tool", sync_tool)
+
+        self.assertEqual(executed, [])
+
+    def test_rejected_awaitable_is_closed_not_leaked(self):
+        firewall = Firewall(policy_with_rule("allow"))
+
+        async def background():
+            return "done"
+
+        def sync_tool():
+            return background()
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            with self.assertRaises(TypeError):
+                firewall.call("demo.tool", sync_tool)
+
+        self.assertFalse([w for w in caught if "never awaited" in str(w.message)])
+
+
+class TerminalAuditFailureTests(unittest.TestCase):
+    """Audit outages are distinguishable before vs after execution."""
+
+    class _SelectiveAuditLog:
+        def __init__(self, fail_on):
+            self.fail_on = fail_on
+            self.events = []
+
+        def record(self, event, call, usage, **kwargs):
+            from agent_firewall.exceptions import AuditWriteError
+
+            if event in self.fail_on:
+                raise AuditWriteError(f"cannot write {event}")
+            self.events.append(event)
+
+    def _run(self, fail_on):
+        executed = []
+        audit_log = self._SelectiveAuditLog(fail_on)
+        firewall = Firewall(policy_with_rule("allow"), audit_log=audit_log)
+        return firewall, audit_log, executed, lambda: executed.append(True)
+
+    def test_failure_after_execution_is_marked(self):
+        import asyncio
+
+        from agent_firewall.exceptions import AuditWriteError
+
+        firewall, audit_log, executed, operation = self._run(fail_on={"executed"})
+        with self.assertRaises(AuditWriteError) as caught:
+            asyncio.run(firewall.acall_with_arguments("demo.tool", {}, operation))
+        self.assertTrue(caught.exception.after_execution)
+        self.assertEqual(executed, [True])
+        self.assertIn("allowed", audit_log.events)
+
+    def test_failure_before_execution_is_not_marked(self):
+        import asyncio
+
+        from agent_firewall.exceptions import AuditWriteError
+
+        firewall, audit_log, executed, operation = self._run(fail_on={"allowed"})
+        with self.assertRaises(AuditWriteError) as caught:
+            asyncio.run(firewall.acall_with_arguments("demo.tool", {}, operation))
+        self.assertFalse(caught.exception.after_execution)
+        self.assertEqual(executed, [])
+        self.assertNotIn("executed", audit_log.events)
 
 
 if __name__ == "__main__":

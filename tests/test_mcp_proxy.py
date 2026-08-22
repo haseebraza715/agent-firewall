@@ -419,7 +419,7 @@ class McpProxyTests(unittest.TestCase):
             "require_approval",
         )
 
-    def test_tools_call_with_null_arguments_is_policed(self):
+    def test_tools_call_with_null_arguments_is_rejected(self):
         responses = self.run_proxy(
             {
                 "default_decision": "block",
@@ -436,13 +436,10 @@ class McpProxyTests(unittest.TestCase):
             server=TOLERANT_SERVER,
         )
 
-        self.assertEqual(responses[0]["error"]["code"], -32001)
-        self.assertEqual(
-            responses[0]["error"]["data"]["decision"],
-            "require_approval",
-        )
+        self.assertEqual(responses[0]["error"]["code"], -32602)
+        self.assertNotIn("EXECUTED", json.dumps(responses))
 
-    def test_tools_call_with_non_object_arguments_is_policed(self):
+    def test_tools_call_with_non_object_arguments_is_rejected(self):
         responses = self.run_proxy(
             {
                 "default_decision": "block",
@@ -459,13 +456,10 @@ class McpProxyTests(unittest.TestCase):
             server=TOLERANT_SERVER,
         )
 
-        self.assertEqual(responses[0]["error"]["code"], -32001)
-        self.assertEqual(
-            responses[0]["error"]["data"]["decision"],
-            "require_approval",
-        )
+        self.assertEqual(responses[0]["error"]["code"], -32602)
+        self.assertNotIn("EXECUTED", json.dumps(responses))
 
-    def test_tools_call_with_null_arguments_allowed_by_name_rule_runs(self):
+    def test_name_only_allow_rule_does_not_rescue_malformed_arguments(self):
         responses = self.run_proxy(
             {
                 "default_decision": "block",
@@ -482,8 +476,8 @@ class McpProxyTests(unittest.TestCase):
             server=TOLERANT_SERVER,
         )
 
-        self.assertIn("result", responses[0])
-        self.assertIn("EXECUTED", responses[0]["result"]["content"][0]["text"])
+        self.assertEqual(responses[0]["error"]["code"], -32602)
+        self.assertNotIn("EXECUTED", json.dumps(responses))
 
     def test_tools_call_with_non_object_params_is_rejected(self):
         responses = self.run_proxy(
@@ -806,6 +800,91 @@ class McpProxyTests(unittest.TestCase):
         fast_lines = [line for line in lines if line.get("id") == "fast"]
         self.assertEqual(len(fast_lines), 1)
         self.assertIn("result", fast_lines[0])
+
+    def test_duplicate_key_child_response_is_dropped_and_request_fails_closed(self):
+        dup_child = (
+            "import json,sys\n"
+            "for line in sys.stdin:\n"
+            "    try:\n"
+            "        m = json.loads(line)\n"
+            "    except Exception:\n"
+            "        continue\n"
+            "    if not isinstance(m, dict) or 'id' not in m:\n"
+            "        continue\n"
+            "    rid = json.dumps(m['id'])\n"
+            "    params = m.get('params')\n"
+            "    clean = isinstance(params, dict) and params.get('mode') == 'clean'\n"
+            "    if clean:\n"
+            '        body = \'{"jsonrpc":"2.0","id":%s,"result":{"r":1}}\' % rid\n'
+            "    else:\n"
+            '        body = (\'{"jsonrpc":"2.0","id":%s,"result":{"r":1},\'\n'
+            '                \'"result":{"r":2}}\') % rid\n'
+            "    sys.stdout.write(body + '\\n')\n"
+            "    sys.stdout.flush()\n"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            policy_path = Path(directory) / "policy.json"
+            policy_path.write_text('{"default_decision": "allow"}', encoding="utf-8")
+            child_path = Path(directory) / "dup_child.py"
+            child_path.write_text(dup_child, encoding="utf-8")
+            env = dict(os.environ)
+            env["PYTHONPATH"] = str(ROOT / "src")
+            process = subprocess.Popen(
+                [
+                    sys.executable,
+                    "-m",
+                    "agent_firewall",
+                    "mcp",
+                    "--policy",
+                    str(policy_path),
+                    "--request-timeout",
+                    "0.3",
+                    "--",
+                    sys.executable,
+                    str(child_path),
+                ],
+                cwd=ROOT,
+                env=env,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            ambiguous = {
+                "jsonrpc": "2.0",
+                "id": "amb",
+                "method": "tools/call",
+                "params": {"name": "database.query", "arguments": {}},
+            }
+            process.stdin.write(json.dumps(ambiguous) + "\n")
+            process.stdin.flush()
+            timeout_response = json.loads(process.stdout.readline())
+            self.assertEqual(timeout_response["id"], "amb")
+            self.assertEqual(timeout_response["error"]["code"], -32002)
+            clean = {
+                "jsonrpc": "2.0",
+                "id": "clean",
+                "method": "tools/call",
+                "params": {"name": "database.query", "mode": "clean"},
+            }
+            process.stdin.write(json.dumps(clean) + "\n")
+            process.stdin.flush()
+            process.stdin.close()
+            stdout = process.stdout.read()
+            stderr = process.stderr.read()
+            status = process.wait(timeout=5)
+            process.stdout.close()
+            process.stderr.close()
+
+        self.assertEqual(status, 0, stderr)
+        lines = [json.loads(line) for line in stdout.splitlines()]
+        self.assertNotIn("agent-firewall:", stdout)
+        by_id = {line.get("id"): line for line in lines}
+        self.assertIn("clean", by_id)
+        self.assertIn("result", by_id["clean"])
+        # The ambiguous response was dropped, never forwarded after the
+        # timeout error was already answered above.
+        self.assertNotIn("amb", {line.get("id") for line in lines})
 
     def test_client_can_reuse_id_after_timeout_without_accepting_late_response(self):
         with tempfile.TemporaryDirectory() as directory:

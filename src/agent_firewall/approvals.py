@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import sqlite3
 import time
 from contextlib import closing
@@ -48,7 +49,12 @@ class SQLiteApprovalQueue:
         timeout_seconds: float = 300,
         poll_seconds: float = 0.25,
     ) -> None:
-        if timeout_seconds <= 0 or poll_seconds <= 0:
+        if (
+            not math.isfinite(timeout_seconds)
+            or timeout_seconds <= 0
+            or not math.isfinite(poll_seconds)
+            or poll_seconds <= 0
+        ):
             raise ValueError("approval timeout and poll interval must be positive")
         self.path = path
         self.timeout_seconds = timeout_seconds
