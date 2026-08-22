@@ -148,6 +148,16 @@ least one is required.
 }
 ```
 
+Values that cannot be modeled as one argv vector never match: strings
+containing line breaks, and — in either form — tokens that are entirely shell
+operators (`;`, `|`, `&`, `<`, `>`, parentheses, backticks), contain command
+substitution (`$(...)`, `` `...` ``, `${...}`), or contain line breaks.
+Bare operators inside a longer argv-list element (for example
+`["sh", "-c", "ls; ls"]` or `["sed", "s/a;b/c/"]`) are treated as inert data,
+matching how an execv-style consumer sees them; if the guarded tool joins its
+argv back into a shell string, prefer a string-form rule or constrain on
+`executable` alone instead.
+
 ## Security notes
 
 Matchers are an enforcement aid, not a sandbox. In particular the `url`

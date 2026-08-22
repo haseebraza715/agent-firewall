@@ -27,6 +27,11 @@ rules matched by tool name and arguments, budgets and repetition caps, and a
 fail-closed default. The MCP proxy (`src/agent_firewall/mcp_proxy.py`) is the
 only component that reads and writes the JSON-RPC stream between the client
 and the wrapped server, and every `tools/call` passes through the policy.
+Other MCP methods (`initialize`, `tools/list`, `resources/read`,
+`prompts/get`, notifications) are relayed without policy evaluation: they are
+in scope for the framing, duplicate-key, batch, and timeout defenses, but a
+method that can fetch a URL or read a file without being a `tools/call` is
+not policed today.
 
 ## Assets
 
@@ -80,12 +85,16 @@ Agent Firewall is an enforcement point, not a sandbox. Specifically it does
 | Failure | Behavior | Where enforced | Regression test |
 |---|---|---|---|
 | Unknown tool with no matching rule | blocked by the fail-closed default | `policy.py` | `tests/test_policy.py::PolicyTests::test_policy_fails_closed_by_default` |
-| Null or malformed `tools/call` arguments | evaluated with no arguments or rejected; never forwarded raw | `mcp_proxy.py` | `tests/test_mcp_proxy.py::McpProxyTests::test_tools_call_with_null_arguments_is_policed`, `test_tools_call_with_non_object_arguments_is_policed`, `test_tools_call_with_non_object_params_is_rejected` |
+| Null or malformed `tools/call` arguments | rejected with a JSON-RPC params error; never evaluated as empty and never forwarded raw | `mcp_proxy.py` | `tests/test_mcp_proxy.py::McpProxyTests::test_tools_call_with_null_arguments_is_rejected`, `test_tools_call_with_non_object_arguments_is_rejected`, `test_name_only_allow_rule_does_not_rescue_malformed_arguments`, `test_tools_call_with_non_object_params_is_rejected` |
+| Client or child line containing duplicate JSON keys | client lines are answered with a parse error; child-originated frames are dropped so an ambiguous response can never be relayed verbatim to the client — the pending request fails closed at its timeout | `jsonrpc.py` (`decode_message`), `mcp_proxy.py` (`_read_child`) | `tests/test_jsonrpc.py::JsonRpcFramingTests::test_duplicate_keys_at_any_depth_are_rejected`, `tests/test_mcp_proxy.py::McpProxyTests::test_duplicate_key_child_response_is_dropped_and_request_fails_closed` |
+| `tools/call` requiring approval with no approver configured | answered with `-32001` and a message naming the missing approver, with `data.decision = "require_approval"`; the call is not executed | `mcp_proxy.py`, `firewall.py` | `tests/test_mcp_proxy_inprocess.py::TruthfulProxyErrorTests::test_held_call_without_approver_reports_hold_not_block` |
+| Audit write failure before execution | explicit `AuditWriteError`; execution is refused and the proxy answers `-32603` stating the call did not run | `audit.py`, `firewall.py` | `tests/test_audit_failures.py::AuditFailureTests::test_audit_write_failure_is_explicit_and_fail_closed` |
+| Audit write failure after the call was attempted | explicit `AuditWriteError` with `after_execution=True`; the tool ran or its outcome is unknown, so the proxy answers `-32603` saying the audit record could not be written — it never claims the call did not execute | `firewall.py` (`_audit_terminal`) | `tests/test_firewall.py::TerminalAuditFailureTests::test_failure_after_execution_is_marked`, `tests/test_mcp_proxy_inprocess.py::TruthfulProxyErrorTests::test_post_execution_audit_failure_never_claims_not_executed` |
 | Missing or empty tool name in `tools/call` | rejected with a JSON-RPC params error | `mcp_proxy.py` | `tests/test_mcp_proxy.py::McpProxyTests::test_tools_call_without_or_empty_name_is_rejected` |
 | JSON-RPC batch requests | never forwarded; every id-bearing element answered with a batch error | `mcp_proxy.py` (`_reject_batch`) | `tests/test_mcp_proxy.py::McpProxyTests::test_jsonrpc_batch_is_rejected_not_forwarded` |
 | Duplicate in-flight request id | the second request is answered with a duplicate-id error; the proxy stays alive | `mcp_proxy.py` (`_forward_request`) | `tests/test_mcp_proxy.py::McpProxyTests::test_duplicate_in_flight_id_returns_error_and_proxy_stays_alive` |
 | Approval timeout | the waiting request auto-denies and fails closed | `approvals.py` (`SQLiteApprovalQueue.wait`) | `tests/test_approvals.py::ApprovalQueueTests::test_wait_auto_denies_after_timeout` |
-| Audit write failure | explicit `AuditWriteError`; the call is not treated as executed | `audit.py` | `tests/test_audit_failures.py::AuditFailureTests::test_audit_write_failure_is_explicit_and_fail_closed` |
+| Audit write failure | explicit `AuditWriteError`; the call is not treated as executed when the failure happens before execution, and is reported as executed-but-unaudited when it happens after (see the two rows above) | `audit.py`, `firewall.py` | `tests/test_audit_failures.py::AuditFailureTests::test_audit_write_failure_is_explicit_and_fail_closed` |
 | State read/write failure | explicit `StorageError`; no reservation is made and execution is refused | `state.py` | `tests/test_state.py::SQLiteStateStoreTests::test_corrupt_database_has_targeted_error`, `tests/test_cli.py::CliTests::test_storage_failure_exits_with_invalid_input_code` |
 | Child MCP server exits before responding | the pending request fails closed with an error instead of hanging | `mcp_proxy.py` (`_read_child`) | `tests/test_mcp_proxy.py::McpProxyTests::test_child_server_failure_fails_pending_call_closed` |
 | Child MCP server stalls without responding | the request times out after `--request-timeout` seconds and is answered with a fail-closed JSON-RPC error (`-32002`); the eventual late response is discarded and the proxy stays alive | `mcp_proxy.py` (`_forward_request`, `_read_child`) | `tests/test_mcp_proxy.py::McpProxyTests::test_request_timeout_fails_call_closed`, `test_late_response_after_timeout_is_discarded_and_proxy_stays_alive` |

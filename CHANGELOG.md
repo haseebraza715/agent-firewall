@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.1 - 2026-08-22
 
 - Harden `deny_private_networks`: legacy IPv4 encodings (`127.1`,
   `2130706433`, `0x7f000001`, leading zeros) and IPv6 zone ids are now
@@ -17,7 +17,7 @@
 - Add `--max-line-bytes` to the `mcp` command (default 64 MiB); oversized
   client or child lines are rejected or dropped without losing framing.
 - Never forward undecodable or non-object client lines to the wrapped MCP
-  server: they are rejected with a JSON-RPC parse error instead of risking
+  server: they are answered with a JSON-RPC parse error instead of risking
   execution by a lenient server outside the policy.
 - Reject batch requests whose elements would smuggle a `tools/call` past the
   per-line policy check; keep the per-element `-32600` rejection for batches
@@ -29,6 +29,55 @@
 - Corrupted SQLite state rows now raise `StorageError` instead of leaking
   `TypeError`/`InvalidOperation`; `doctor` reports an explicitly empty MCP
   command as a failed check.
+- Harden the `command` matcher against multi-statement spellings: string
+  values containing line breaks never match, argv-list elements must satisfy
+  the same shell-control rule as lexed string tokens, and backtick command
+  substitution (`\`cmd\``) never matches in either form. Bare operators inside
+  a longer list element stay inert data, matching execv semantics.
+- Classify lone-integer URL hosts by value with explicit hex and octal bases
+  instead of a length heuristic: `http://017700000001/` is now classified as
+  `127.0.0.1` and denied by `deny_private_networks`. Integers beyond 32 bits
+  classify by their modulo-2^32 wraparound, and dotted quads whose parts carry
+  redundant leading zeros are classified under both the octal and decimal
+  readings, matching the divergent behavior of real resolvers.
+- Treat duplicate JSON keys anywhere in a JSON-RPC message as malformed input:
+  client lines are answered with a parse error, and child-originated frames
+  carrying duplicate keys are dropped rather than relayed, so neither side can
+  act on a different view of a message than the one the proxy decoded. A
+  request whose response was dropped fails closed at its timeout.
+- Reject `tools/call` requests whose `arguments` are null or not an object
+  with `-32602`, instead of evaluating them as `{}` while forwarding the
+  original parameters.
+- Report internal firewall errors truthfully over MCP: an audit-write failure
+  on a terminal event answers `-32603` saying the tool ran or was attempted
+  but its audit record could not be written; pre-execution failures and
+  unexpected errors also use `-32603` and never claim a call "was not
+  executed" unless it was.
+- Give held calls without any approver their own signal: same `-32001` code,
+  but the message names the missing approver so misconfiguration is not
+  mistaken for a policy denial.
+- Reject tool names containing line breaks at `ToolCall.create` so agent
+  output cannot forge lines in text formatting.
+- Raise `TypeError` from the synchronous `Firewall.call`/`wrap` path when a
+  tool returns an awaitable, closing the coroutine instead of leaking an
+  un-awaited call that would execute outside the firewall.
+- Enforce finite positive timeouts in `SQLiteApprovalQueue` directly, not only
+  through CLI flags.
+- Cap per-call cost inputs at `$1e12`: astronomically large client-supplied
+  `estimated_cost_usd` values are rejected at the boundary instead of
+  overflowing budget accumulation later. Policy budget limits remain
+  unrestricted trusted configuration.
+- Validate numeric CLI flags: `--approval-timeout` and `--request-timeout`
+  reject NaN/infinite/non-positive values, and `dashboard --port` must be
+  0-65535, all failing at argument parsing instead of misbehaving at runtime.
+- Make `replay` validate scenario input types (`arguments` object, string
+  `title`/`source_url`) so malformed scenario files exit `2` with a terse
+  error instead of a traceback.
+- Run the policy linter inside `doctor`: error-severity lint findings now fail
+  the `policy_lint` check.
+- Add `pytest` to the `dev` extra so the documented
+  `pip install -e .[dev] && python -m pytest tests` workflow works from a
+  clean checkout.
 
 ## 0.3.0 - 2026-08-08
 

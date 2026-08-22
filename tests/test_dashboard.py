@@ -129,6 +129,8 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, 403)
 
     def test_page_has_restrictive_security_headers(self):
+        from agent_firewall import __version__
+
         with urlopen(self.dashboard.address + "/", timeout=2) as response:
             page = response.read().decode("utf-8")
             policy = response.headers["Content-Security-Policy"]
@@ -137,7 +139,7 @@ class DashboardTests(unittest.TestCase):
         self.assertIn("Agent Firewall", page)
         self.assertIn("default-src 'none'", policy)
         self.assertEqual(response.headers["X-Frame-Options"], "DENY")
-        self.assertTrue(server.startswith("AgentFirewall/0.3.0"))
+        self.assertTrue(server.startswith(f"AgentFirewall/{__version__}"))
 
     def test_foreign_host_header_is_rejected(self):
         request = Request(
