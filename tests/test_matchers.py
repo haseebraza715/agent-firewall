@@ -548,6 +548,41 @@ class LegacyIpLiteralTests(unittest.TestCase):
         )
 
 
+class StackedSqlStatementTests(unittest.TestCase):
+    def test_statement_separator_with_trailing_statement_never_matches(self):
+        rule = {"operator": "sql", "in": ["SELECT"]}
+        stacked = (
+            "/* nightly cleanup */\n"
+            "SELECT id FROM sessions LIMIT 1;\n"
+            "DELETE FROM sessions;"
+        )
+        for statement in (
+            stacked,
+            "SELECT 1; DELETE FROM t",
+            "SELECT 1;\nDROP TABLE x",
+            "-- lead\nSELECT 1 ; UPDATE t SET a=1",
+            "WITH x AS (SELECT 1) SELECT * FROM x; VACUUM",
+        ):
+            with self.subTest(statement=statement):
+                self.assertFalse(match(rule, statement))
+
+    def test_single_statements_with_trailing_semicolon_still_match(self):
+        rule = {"operator": "sql", "equals": "select"}
+        for statement in (
+            "SELECT 1",
+            "SELECT 1;",
+            "SELECT 1 ; ",
+            "/* c */ SELECT a FROM t;",
+        ):
+            with self.subTest(statement=statement):
+                self.assertTrue(match(rule, statement))
+
+    def test_quoted_semicolons_fail_closed(self):
+        self.assertFalse(
+            match({"operator": "sql", "equals": "select"}, "SELECT ';' ; DELETE t")
+        )
+
+
 class ScalarBehaviourPreservationTests(unittest.TestCase):
     def test_scalar_string_patterns_stay_globs(self):
         self.assertFalse(matchers.is_typed("*.example.com"))

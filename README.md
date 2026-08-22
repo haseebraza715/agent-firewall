@@ -75,10 +75,10 @@ Regenerate the recording with `./scripts/demo/record.sh` (requires asciinema, ag
 
 ## Validation
 
-483 tests, including the security-hardening suite (SSRF address encodings, duplicate-key poisoning, recursion-depth DoS, MCP fail-closed boundaries), pass in CI; ruff and strict mypy are clean:
+486 tests, including the security-hardening suite (SSRF address encodings, duplicate-key poisoning, recursion-depth DoS, MCP fail-closed boundaries), pass in CI; ruff and strict mypy are clean:
 
 ```bash
-.venv/bin/python -m pytest tests -q --no-header   # 483 passed, 108 subtests passed
+.venv/bin/python -m pytest tests -q --no-header   # 486 passed, 117 subtests passed
 ```
 
 [![CI](https://github.com/haseebraza715/agent-firewall/actions/workflows/ci.yml/badge.svg)](https://github.com/haseebraza715/agent-firewall/actions/workflows/ci.yml)

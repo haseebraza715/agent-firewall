@@ -17,7 +17,7 @@ budgets, and an MCP proxy for existing servers.
    depth-bounded JSON processing against `RecursionError` DoS, and a
    fail-closed MCP stdio proxy that never forwards undecodable or batch lines
    and times stalled servers out per-request.
-3. Evidence: 483 tests plus 108 subtests (including a security-hardening
+3. Evidence: 486 tests plus 117 subtests (including a security-hardening
    suite) green, ruff and strict mypy clean, CI on GitHub Actions, an
    end-to-end reproduction of a public MCP SSRF incident (Puppeteer #3662),
    and an internally curated 47-case development evaluation (exact decision
@@ -45,7 +45,7 @@ stdio proxy that blocks or rejects calls without forwarding them. The
 hardening pass closed real bypass classes: legacy IPv4 encodings and IPv6
 zone ids in the SSRF gate, duplicate JSON keys that could widen a policy,
 recursion-depth DoS on agent-controlled input, and undecodable lines that a
-lenient MCP server might otherwise execute. Evidence: 483 tests plus a
+lenient MCP server might otherwise execute. Evidence: 486 tests plus a
 security-hardening suite, ruff and strict mypy clean, a working reproduction
 of a public MCP SSRF incident, and an honestly-labeled internal 47-case
 evaluation with zero dangerous allows.

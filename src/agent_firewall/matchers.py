@@ -541,9 +541,16 @@ def _match_sql(pattern: dict[str, Any], value: Any) -> bool:
 
 
 def _sql_operation(statement: str) -> str | None:
-    """Return the leading SQL operation, ignoring whitespace and comments."""
+    """Return the leading SQL operation, ignoring whitespace and comments.
+
+    Statements containing a statement separator with anything after it are
+    unmodeled (a second statement may hide behind the first), so they return
+    None and never match.
+    """
     stripped = _strip_sql_comments(statement).strip()
     if not stripped:
+        return None
+    if ";" in stripped.rstrip(";"):
         return None
     return stripped.split(maxsplit=1)[0].upper()
 

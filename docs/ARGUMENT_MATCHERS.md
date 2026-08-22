@@ -118,8 +118,11 @@ Exactly one of `equals` or `in` is required.
 | `equals` | `str` | the leading operation must equal this |
 | `in` | `[str]` | the leading operation must be in this list |
 
-Only the first keyword is examined; the matcher does not parse the rest of the
-statement.
+Only the first keyword is examined, and a statement separator followed by
+anything (`SELECT 1; DELETE ...`) never matches: a second statement could
+hide behind a read-only first keyword. A single trailing semicolon is fine.
+A semicolon inside a quoted literal is also treated as a separator and fails
+closed.
 
 ## `command`
 

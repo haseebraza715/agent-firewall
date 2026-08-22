@@ -29,6 +29,11 @@
 - Corrupted SQLite state rows now raise `StorageError` instead of leaking
   `TypeError`/`InvalidOperation`; `doctor` reports an explicitly empty MCP
   command as a failed check.
+- Harden the `sql` matcher against stacked statements: a statement separator
+  followed by anything (`SELECT 1; DELETE ...`) never matches a read-only
+  rule, closing the second-statement hole behind an allowed first keyword. A
+  single trailing semicolon still matches; semicolons inside quoted literals
+  also fail closed.
 - Harden the `command` matcher against multi-statement spellings: string
   values containing line breaks never match, argv-list elements must satisfy
   the same shell-control rule as lexed string tokens, and backtick command
