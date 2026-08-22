@@ -95,9 +95,10 @@ class PrivateNetworkBypassTests(unittest.TestCase):
         self.assertTrue(matchers.match(pattern, "http://example.com/"))
         self.assertTrue(matchers.match(pattern, "http://localhost.example/"))
 
-    def test_oversized_decimal_tokens_are_not_misclassified(self):
+    def test_oversized_decimal_tokens_classify_by_wraparound(self):
         pattern = self._pattern()
-        self.assertTrue(matchers.match(pattern, "http://42949672960/"))
+        self.assertFalse(matchers.match(pattern, "http://42949672960/"))
+        self.assertTrue(matchers.match(pattern, "http://99999999999999/"))
 
     def test_private_network_rule_runs_through_policy(self):
         policy = Policy.from_dict(
@@ -596,6 +597,66 @@ class DoctorEmptyCommandTests(unittest.TestCase):
             by_name = {check.name: check for check in checks}
             self.assertFalse(by_name["mcp"].ok)
             self.assertIn("no MCP command", by_name["mcp"].message)
+
+
+class ToolCallBoundaryTests(unittest.TestCase):
+    def test_tool_names_reject_line_breaks(self):
+        for name in (
+            "email.send\nrm -rf ~",
+            "email.send\r\nrm -rf ~",
+            "\nemail.send",
+            "email.send\n",
+        ):
+            with self.subTest(name=name):
+                with self.assertRaises(ValueError):
+                    ToolCall.create(name=name)
+
+    def test_tool_names_still_accept_plain_strings(self):
+        for name in ("database.query", "email.send", "tool\tname"):
+            with self.subTest(name=name):
+                ToolCall.create(name=name)
+
+
+class CostMagnitudeTests(unittest.TestCase):
+    def test_astronomical_exponents_are_rejected_not_accepted(self):
+        for cost in ("1e999999999999999999", 10**400, "1e" + str(10**6)):
+            with self.subTest(cost=cost):
+                with self.assertRaises(ValueError):
+                    ToolCall.create(name="t", arguments={}, estimated_cost_usd=cost)
+
+    def test_ordinary_costs_are_still_accepted(self):
+        from agent_firewall.models import MAX_CALL_COST_USD
+
+        for cost in (0, "0.25", "19.99", 1e5, Decimal("2500000")):
+            with self.subTest(cost=cost):
+                call = ToolCall.create(name="t", arguments={}, estimated_cost_usd=cost)
+                self.assertLessEqual(call.estimated_cost_usd, MAX_CALL_COST_USD)
+
+    def test_cap_boundary_is_inclusive(self):
+        from agent_firewall.models import MAX_CALL_COST_USD
+
+        accepted = ToolCall.create(
+            name="t", arguments={}, estimated_cost_usd=Decimal("1e12")
+        )
+        self.assertEqual(accepted.estimated_cost_usd, MAX_CALL_COST_USD)
+        with self.assertRaises(ValueError):
+            ToolCall.create(name="t", arguments={}, estimated_cost_usd="1.000001e12")
+
+
+class ReservationSemanticsTests(unittest.TestCase):
+    def test_reserves_usage_truth_table(self):
+        from agent_firewall import Decision
+        from agent_firewall.models import DecisionKind
+
+        allow = Decision(DecisionKind.ALLOW, "r", "rule")
+        block = Decision(DecisionKind.BLOCK, "r", "rule")
+        hold = Decision(DecisionKind.REQUIRE_APPROVAL, "r", "rule")
+        self.assertTrue(allow.reserves_usage(approved=False))
+        self.assertTrue(allow.reserves_usage(approved=True))
+        self.assertFalse(block.reserves_usage(approved=False))
+        self.assertFalse(block.reserves_usage(approved=True))
+        self.assertFalse(hold.reserves_usage(approved=False))
+        self.assertTrue(hold.reserves_usage(approved=True))
 
 
 if __name__ == "__main__":

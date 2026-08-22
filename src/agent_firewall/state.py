@@ -9,7 +9,7 @@ from threading import Lock
 from typing import Protocol
 
 from .exceptions import StorageError
-from .models import Decision, DecisionKind, ToolCall, Usage
+from .models import Decision, ToolCall, Usage
 from .policy import Policy
 
 
@@ -47,9 +47,7 @@ class MemoryStateStore:
     ) -> StateResult:
         with self._lock:
             decision = policy.evaluate(call, self._usage)
-            if decision.kind is DecisionKind.ALLOW or (
-                approved and decision.kind is not DecisionKind.BLOCK
-            ):
+            if decision.reserves_usage(approved):
                 self._usage.record(call)
             return StateResult(decision, self._usage.copy())
 
@@ -80,9 +78,7 @@ class SQLiteStateStore:
             connection.execute("BEGIN IMMEDIATE")
             usage = self._load_usage(connection)
             decision = policy.evaluate(call, usage)
-            if decision.kind is DecisionKind.ALLOW or (
-                approved and decision.kind is not DecisionKind.BLOCK
-            ):
+            if decision.reserves_usage(approved):
                 self._record(connection, usage, call)
             connection.commit()
             return StateResult(decision, usage)

@@ -23,13 +23,18 @@ class ArgumentAuditMode(str, Enum):
     FULL = "full"
 
 
-def money(value: Any) -> Decimal:
+MAX_CALL_COST_USD = Decimal("1e12")
+
+
+def money(value: Any, *, max_value: Decimal | None = None) -> Decimal:
     try:
         amount = Decimal(str(value))
     except (InvalidOperation, ValueError) as exc:
         raise ValueError("cost must be a valid decimal number") from exc
     if not amount.is_finite() or amount < 0:
         raise ValueError("cost must be finite and non-negative")
+    if max_value is not None and amount > max_value:
+        raise ValueError(f"cost must not exceed {max_value:f}")
     return amount
 
 
@@ -75,10 +80,12 @@ class ToolCall:
     ) -> ToolCall:
         if not isinstance(name, str) or not name.strip():
             raise ValueError("tool name must be a non-empty string")
+        if "\n" in name or "\r" in name:
+            raise ValueError("tool name must not contain line breaks")
         return cls(
             name=name,
             arguments=dict(arguments or {}),
-            estimated_cost_usd=money(estimated_cost_usd),
+            estimated_cost_usd=money(estimated_cost_usd, max_value=MAX_CALL_COST_USD),
         )
 
     @property
@@ -99,6 +106,11 @@ class Decision:
     reason: str
     code: str
     rule_index: int | None = None
+
+    def reserves_usage(self, approved: bool) -> bool:
+        if self.kind is DecisionKind.ALLOW:
+            return True
+        return approved and self.kind is not DecisionKind.BLOCK
 
     def as_dict(self) -> dict[str, Any]:
         result: dict[str, Any] = {

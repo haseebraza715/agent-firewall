@@ -1,3 +1,4 @@
+import ipaddress
 import unittest
 
 from agent_firewall import matchers
@@ -450,6 +451,101 @@ class CommandMatcherTests(unittest.TestCase):
         ):
             with self.subTest(value=value):
                 self.assertFalse(match(pattern, value))
+
+    def test_line_breaks_in_string_values_do_not_match(self):
+        pattern = {"operator": "command", "argv_prefix": ["git"]}
+        for value in (
+            "git status\nrm -rf ~",
+            "git status\r\nrm -rf ~",
+            "\ngit status",
+            "git commit -m hello\nworld",
+        ):
+            with self.subTest(value=value):
+                self.assertFalse(match(pattern, value))
+
+    def test_line_breaks_in_list_elements_do_not_match(self):
+        pattern = {"operator": "command", "argv_prefix": ["git"]}
+        for value in (
+            ["git", "status\nrm -rf ~"],
+            ["git\nstatus"],
+            ["git", "-c", "x=1", "commit\n-m", "msg"],
+        ):
+            with self.subTest(value=value):
+                self.assertFalse(match(pattern, value))
+
+    def test_shell_control_in_list_elements_does_not_match(self):
+        for pattern, value in (
+            ({"operator": "command", "argv_prefix": ["git"]}, ["git", ";"]),
+            ({"operator": "command", "argv_prefix": ["git"]}, ["git", "|"]),
+            (
+                {"operator": "command", "argv_prefix": ["git"]},
+                ["git", "status$(evil)"],
+            ),
+            (
+                {"operator": "command", "argv_prefix": ["sh", "-c"]},
+                ["sh", "-c", "${X}"],
+            ),
+            ({"operator": "command", "executable": "python"}, ["python", "`id`"]),
+        ):
+            with self.subTest(value=value):
+                self.assertFalse(match(pattern, value))
+
+    def test_legit_argv_lists_with_metacharacters_still_match(self):
+        for pattern, value in (
+            (
+                {"operator": "command", "argv_prefix": ["sh", "-c"]},
+                ["sh", "-c", "ls; ls"],
+            ),
+            (
+                {"operator": "command", "argv_prefix": ["find"]},
+                ["find", ".", "-name", "*.txt"],
+            ),
+            (
+                {"operator": "command", "argv_prefix": ["sed"]},
+                ["sed", "s/a;b/c/", "file.txt"],
+            ),
+            ({"operator": "command", "argv_prefix": ["git"]}, ["git", "a;b|c"]),
+        ):
+            with self.subTest(value=value):
+                self.assertTrue(match(pattern, value))
+
+
+class LegacyIpLiteralTests(unittest.TestCase):
+    def test_octal_integer_encoding_is_classified_private(self):
+        self.assertFalse(
+            match(
+                {"operator": "url", "deny_private_networks": True},
+                "http://017700000001/",
+            )
+        )
+
+    def test_decimal_and_hex_integer_encodings_stay_denied(self):
+        for host in ("2130706433", "0x7f000001", "127.1", "0177.0.0.1"):
+            with self.subTest(host=host):
+                self.assertFalse(
+                    match(
+                        {"operator": "url", "deny_private_networks": True},
+                        f"http://{host}/",
+                    )
+                )
+
+    def test_out_of_range_integers_classify_by_wraparound(self):
+        self.assertFalse(
+            match(
+                {"operator": "url", "deny_private_networks": True},
+                "http://7147006462/",
+            )
+        )
+        address = matchers._as_ip_address("99999999999999")
+        self.assertEqual(address, ipaddress.ip_address("16.122.63.255"))
+
+    def test_dotted_quads_with_leading_zeros_classify_both_readings(self):
+        self.assertFalse(
+            match(
+                {"operator": "url", "deny_private_networks": True},
+                "http://010.020.030.040/",
+            )
+        )
 
 
 class ScalarBehaviourPreservationTests(unittest.TestCase):

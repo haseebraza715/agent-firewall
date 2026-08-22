@@ -379,14 +379,34 @@ def _is_private_literal(hostname: str | None) -> bool:
     common resolvers still accept (``127.1``, ``2130706433``, ``0x7f000001``,
     leading zeros) and IPv6 zone ids are classified as well, so the private
     networks gate cannot be sidestepped by rewriting the address.
+
+    Legacy encodings can parse differently across resolvers (octal versus
+    decimal leading zeros; integer overflow wrapping versus DNS lookup), so
+    every plausible interpretation is checked: if any of them lands on a
+    non-global address, the hostname is treated as private.
     """
     if hostname is None:
         return False
     hostname = hostname.split("%", 1)[0]
-    address = _as_ip_address(hostname)
-    if address is None:
-        return False
-    return not address.is_global
+    primary = _as_ip_address(hostname)
+    if primary is not None and not primary.is_global:
+        return True
+    alternative = _decimal_dotted_candidate(hostname)
+    return alternative is not None and not alternative.is_global
+
+
+def _decimal_dotted_candidate(hostname: str) -> ipaddress.IPv4Address | None:
+    """Some resolvers read ``010.020.030.040`` as octal per part, others as
+    decimal; classify the decimal reading too."""
+    parts = hostname.split(".")
+    if len(parts) != 4 or not all(part.isascii() and part.isdigit() for part in parts):
+        return None
+    normalized = ".".join(str(int(part)) for part in parts)
+    try:
+        address = ipaddress.ip_address(normalized)
+    except ValueError:
+        return None
+    return address if isinstance(address, ipaddress.IPv4Address) else None
 
 
 def _as_ip_address(
@@ -400,14 +420,36 @@ def _as_ip_address(
         return parsed
     if _inet_aton is None:
         return None
-    if hostname.isdigit() and len(hostname) > 10:
-        # A pure decimal token of 11+ digits wraps inside inet_aton; real
-        # resolvers would treat it as a DNS name, so leave it unclassified.
-        return None
+    integer = _legacy_integer_value(hostname)
+    if integer is not None:
+        # Resolvers disagree about lone integers that exceed 32 bits (darwin
+        # wraps modulo 2**32, glibc falls back to DNS), so classify the
+        # wrapped value: over-blocking an unresolvable spelling is harmless,
+        # under-blocking a wrapped private address is not.
+        return ipaddress.ip_address(integer & 0xFFFFFFFF)
     try:
         return ipaddress.ip_address(_inet_aton(hostname))
     except OSError:
         return None
+
+
+def _legacy_integer_value(text: str) -> int | None:
+    base = 10
+    digits = text
+    if text[:2].lower() == "0x":
+        digits, base = text[2:], 16
+    elif len(text) > 1 and text[0] == "0":
+        digits, base = text[1:], 8
+    allowed = (
+        "01234567"
+        if base == 8
+        else "0123456789"
+        if base == 10
+        else "0123456789abcdefABCDEF"
+    )
+    if not digits or any(char not in allowed for char in digits):
+        return None
+    return int(digits, base)
 
 
 def _match_path(pattern: dict[str, Any], value: Any) -> bool:
@@ -556,11 +598,10 @@ def _match_command(pattern: dict[str, Any], value: Any) -> bool:
 
 
 def _command_argv(value: Any) -> list[str] | None:
-    if isinstance(value, list):
-        if not value or not all(isinstance(item, str) for item in value):
-            return None
-        return list(value)
+    argv: list[str]
     if isinstance(value, str):
+        if "\n" in value or "\r" in value:
+            return None
         try:
             lexer = shlex.shlex(value, posix=True, punctuation_chars=";&|<>()`")
             lexer.whitespace_split = True
@@ -568,16 +609,27 @@ def _command_argv(value: Any) -> list[str] | None:
             argv = list(lexer)
         except ValueError:
             return None
-        if any(_is_shell_control(token) for token in argv):
+    elif isinstance(value, list):
+        if not value or not all(isinstance(item, str) for item in value):
             return None
-        return argv if argv else None
-    return None
+        argv = list(value)
+    else:
+        return None
+    if not argv or any(_unmodeled_token(token) for token in argv):
+        return None
+    return argv
+
+
+def _unmodeled_token(token: str) -> bool:
+    if "\n" in token or "\r" in token:
+        return True
+    return _is_shell_control(token)
 
 
 def _is_shell_control(token: str) -> bool:
     if token and all(char in ";&|<>()`" for char in token):
         return True
-    return "$(" in token or "${" in token
+    return "$(" in token or "${" in token or "`" in token
 
 
 def _command_executable_matches(pattern: str, argv0: str) -> bool:
