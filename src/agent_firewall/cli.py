@@ -230,6 +230,25 @@ def build_parser() -> argparse.ArgumentParser:
     dashboard.add_argument("--state", type=Path, required=True)
     dashboard.add_argument("--host", default="127.0.0.1")
     dashboard.add_argument("--port", type=_port, default=8787)
+    dashboard.add_argument(
+        "--token",
+        default=None,
+        metavar="TOKEN",
+        help=(
+            "approval token for scripted use (the startup banner always "
+            "prints the effective token)"
+        ),
+    )
+    dashboard.add_argument(
+        "--approval-timeout",
+        type=_finite_positive_float,
+        default=300,
+        metavar="SECONDS",
+        help=(
+            "hide pending rows older than this; match the proxy's "
+            "--approval-timeout so held calls stay visible"
+        ),
+    )
     return parser
 
 
@@ -475,6 +494,8 @@ def _dashboard(args: argparse.Namespace) -> int:
         args.state,
         host=args.host,
         port=args.port,
+        token=args.token,
+        approval_timeout=args.approval_timeout,
     )
     try:
         dashboard.serve_forever()

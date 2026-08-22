@@ -608,6 +608,98 @@ class McpProxyTests(unittest.TestCase):
         self.assertIn("error", response)
         self.assertEqual(response["error"]["code"], -32003)
 
+    def test_lifecycle_lines_reach_stderr(self):
+        with tempfile.TemporaryDirectory() as directory:
+            policy_path = Path(directory) / "policy.json"
+            policy_path.write_text('{"default_decision": "block"}', encoding="utf-8")
+            env = dict(os.environ)
+            env["PYTHONPATH"] = str(ROOT / "src")
+            process = subprocess.Popen(
+                [
+                    sys.executable,
+                    "-m",
+                    "agent_firewall",
+                    "mcp",
+                    "--policy",
+                    str(policy_path),
+                    "--request-timeout",
+                    "2",
+                    "--",
+                    sys.executable,
+                    str(FAKE_SERVER),
+                ],
+                cwd=ROOT,
+                env=env,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            request = {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {},
+            }
+            stdout, stderr = process.communicate(json.dumps(request) + "\n", timeout=5)
+
+        self.assertEqual(process.returncode, 0, stderr)
+        self.assertIn("spawned", stderr)
+        self.assertIn("child exited rc=0", stderr)
+
+    def test_held_without_approver_prints_restart_hint_on_stderr(self):
+        with tempfile.TemporaryDirectory() as directory:
+            policy_path = Path(directory) / "policy.json"
+            policy_path.write_text(
+                json.dumps(
+                    {
+                        "default_decision": "block",
+                        "rules": [
+                            {
+                                "tool": "anything",
+                                "decision": "require_approval",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            env = dict(os.environ)
+            env["PYTHONPATH"] = str(ROOT / "src")
+            process = subprocess.Popen(
+                [
+                    sys.executable,
+                    "-m",
+                    "agent_firewall",
+                    "mcp",
+                    "--policy",
+                    str(policy_path),
+                    "--request-timeout",
+                    "2",
+                    "--",
+                    sys.executable,
+                    str(TOLERANT_SERVER),
+                ],
+                cwd=ROOT,
+                env=env,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            held = {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {"name": "anything", "arguments": {}},
+            }
+            stdout, stderr = process.communicate(json.dumps(held) + "\n", timeout=5)
+
+        response = json.loads(stdout.splitlines()[0])
+        self.assertEqual(response["error"]["code"], -32001)
+        self.assertIn("--approve-terminal", stderr)
+        self.assertIn("--approve-web", stderr)
+
     def test_web_approval_unblocks_waiting_tool_call(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

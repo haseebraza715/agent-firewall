@@ -462,6 +462,26 @@ class DoctorCommandTests(unittest.TestCase):
         )
         self.assertEqual(args.port, 0)
 
+    def test_dashboard_token_flag_passthrough(self):
+        args = build_parser().parse_args(
+            [
+                "dashboard",
+                "--policy",
+                "p",
+                "--audit",
+                "a",
+                "--state",
+                "s",
+                "--token",
+                "demo-token-123",
+            ]
+        )
+        self.assertEqual(args.token, "demo-token-123")
+        default = build_parser().parse_args(
+            ["dashboard", "--policy", "p", "--audit", "a", "--state", "s"]
+        )
+        self.assertIsNone(default.token)
+
 
 class ReplayInputValidationTests(unittest.TestCase):
     def _write_scenarios(self, scenarios):

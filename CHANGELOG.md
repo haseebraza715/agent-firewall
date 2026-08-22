@@ -1,5 +1,35 @@
 # Changelog
 
+## Unreleased
+
+- Terminal approver now shows the tool, its bounded arguments, and the policy
+  reason; accepts `y`/`yes`; retries once after a non-answer; and states its
+  denial when input ends or arrives empty.
+- The MCP proxy explains held calls on stderr: with no approver configured it
+  says to restart with `--approve-terminal` or `--approve-web`; with
+  `--approve-web` it prints the exact dashboard start command at startup.
+- The MCP proxy logs lifecycle events on stderr: spawned child command and
+  pid, child exit code, and stalled-write aborts.
+- The dashboard startup banner prints the effective approval token alongside
+  the URL, and `dashboard --token` accepts a fixed token for scripted use.
+- `dashboard --approval-timeout` aligns the dashboard with the proxy's hold
+  window (default 300 seconds).
+- Dashboard decisions surface failures instead of swallowing them: non-2xx
+  approve/deny responses (for example after a dashboard restart minted a new
+  token) appear in a `role="alert"` status region; keyboard focus stays on
+  the same Approve/Deny button across the 1.5 s refresh; button text meets
+  contrast guidelines; and the refresh timestamp no longer spams screen
+  readers through a live region.
+- Pending-approval listings hide rows older than the approval timeout and say
+  how many are hidden, so approvals orphaned by a dead proxy do not silently
+  accumulate in the operator's view.
+- New live demo: `scripts/demo/attack_demo.py` runs a deliberately vulnerable
+  MCP server behind the real proxy and walks six scenarios in under a second,
+  including an octal-SSRF block, duplicate-key smuggling, stacked SQL, and a
+  held call approved end-to-end through the dashboard API.
+
+## 0.3.1 - 2026-08-22
+
 ## 0.3.1 - 2026-08-22
 
 - Harden `deny_private_networks`: legacy IPv4 encodings (`127.1`,

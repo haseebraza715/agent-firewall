@@ -6,13 +6,16 @@ covered when coverage is measured in the test process.
 """
 
 import asyncio
+import io
 import json
 import unittest
+from contextlib import redirect_stderr
 from unittest.mock import AsyncMock, patch
 
 from agent_firewall import Firewall, Policy
 from agent_firewall.jsonrpc import encode_message, request_key
-from agent_firewall.mcp_proxy import McpStdioProxy
+from agent_firewall.mcp_proxy import McpStdioProxy, TerminalApprover
+from agent_firewall.models import Decision, DecisionKind, ToolCall
 
 
 def _proxy(policy_dict, **kwargs):
@@ -423,6 +426,120 @@ class TruthfulProxyErrorTests(unittest.TestCase):
         )
         self.assertEqual(written["error"]["code"], -32603)
         self.assertIn("not executed", written["error"]["message"])
+
+
+class TerminalApproverPromptTests(unittest.TestCase):
+    class FakeTerminal:
+        def __init__(self, answers):
+            self.answers = list(answers)
+            self.written = []
+
+        def write(self, text):
+            self.written.append(text)
+
+        def flush(self):
+            pass
+
+        def readline(self):
+            if not self.answers:
+                raise EOFError
+            item = self.answers.pop(0)
+            if isinstance(item, Exception):
+                raise item
+            return item
+
+    def _ask(self, answers, arguments=None):
+        call = ToolCall.create(
+            name="email.send", arguments=arguments or {"to": "a@b.c"}
+        )
+        decision = Decision(
+            kind=DecisionKind.REQUIRE_APPROVAL,
+            reason="outbound email needs sign-off",
+            code="rule",
+        )
+        terminal = self.FakeTerminal(answers)
+        approved = TerminalApprover._prompt(call, decision, terminal)
+        return approved, "\n".join(terminal.written)
+
+    def test_y_and_yes_approve(self):
+        for answer in ("y", "yes", "  YES \n"):
+            with self.subTest(answer=answer):
+                approved, transcript = self._ask([answer])
+                self.assertTrue(approved)
+
+    def test_empty_no_and_n_denies(self):
+        for answer in ("", "n", "no\n"):
+            with self.subTest(answer=answer):
+                approved, _ = self._ask([answer])
+                self.assertFalse(approved)
+
+    def test_garbage_reprompts_once_then_denies(self):
+        approved, transcript = self._ask(["maybe?", "nope"])
+        self.assertFalse(approved)
+        self.assertEqual(transcript.count("Answer y or n"), 1)
+
+    def test_eof_denies_with_message(self):
+        err = io.StringIO()
+        with redirect_stderr(err):
+            approved, _ = self._ask([EOFError()])
+        self.assertFalse(approved)
+        self.assertIn("denied", err.getvalue())
+
+    def test_prompt_shows_arguments_and_truncates_long_ones(self):
+        big_args = {"body": "x" * 400}
+        _, transcript = self._ask([], arguments=big_args)
+        self.assertIn("email.send", transcript)
+        self.assertIn("outbound email needs sign-off", transcript)
+        self.assertIn("...", transcript)
+        arg_lines = [line for line in transcript.splitlines() if '"body"' in line]
+        self.assertEqual(len(arg_lines), 1)
+        self.assertLessEqual(len(arg_lines[0]), 140)
+
+    def test_missing_tty_prints_guidance_and_denies(self):
+        err = io.StringIO()
+        approver = TerminalApprover()
+        call = ToolCall.create(name="email.send")
+        decision = Decision(kind=DecisionKind.REQUIRE_APPROVAL, reason="r", code="rule")
+        with patch("agent_firewall.mcp_proxy.open", side_effect=OSError):
+            with redirect_stderr(err):
+                approved = asyncio.run(approver(call, decision))
+        self.assertFalse(approved)
+        self.assertIn("no terminal available", err.getvalue())
+
+
+class HoldHintTests(unittest.TestCase):
+    HELD_POLICY = {
+        "default_decision": "block",
+        "rules": [{"tool": "email.send", "decision": "require_approval"}],
+    }
+
+    def _held(self, proxy):
+        return _call(
+            proxy,
+            {
+                "jsonrpc": "2.0",
+                "id": 21,
+                "method": "tools/call",
+                "params": {"name": "email.send", "arguments": {}},
+            },
+        )
+
+    def test_hold_hint_printed_once_to_stderr(self):
+        proxy = _proxy(self.HELD_POLICY, hold_hint="HINT-ME")
+        err = io.StringIO()
+        with redirect_stderr(err):
+            self._held(proxy)
+            self._held(proxy)
+        output = err.getvalue()
+        self.assertIn("HINT-ME", output)
+        self.assertEqual(output.count("HINT-ME"), 1)
+
+    def test_no_hint_without_configuration(self):
+        proxy = _proxy(self.HELD_POLICY)
+        err = io.StringIO()
+        with redirect_stderr(err):
+            self._held(proxy)
+        self.assertEqual(err.getvalue(), "")
 
 
 if __name__ == "__main__":

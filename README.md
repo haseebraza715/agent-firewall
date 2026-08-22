@@ -55,6 +55,35 @@ python3 -m venv .venv && .venv/bin/pip install -e .
 
 Output: `allow  database.query` with the matching rule reason. Exit codes for `check`: `0` allow, `3` require_approval, `4` block, `2` invalid input; `policy lint`, `replay` with missed scenarios, and `doctor` failures exit `1`; `benchmark` with failed thresholds exits `5`. The Python API guards real functions the same way: `Firewall.from_policy_file(...)` plus `firewall.wrap("email.send", send_email)` in [examples/wrap_tool.py](examples/wrap_tool.py); a denial raises `ToolCallBlocked`, not a crash.
 
+## Guard an MCP server
+
+Wrap any stdio MCP server; only its `tools/call` traffic passes through the policy:
+
+```bash
+agent-firewall mcp --policy examples/policy.json \
+  --audit firewall-audit.jsonl --state firewall.db \
+  --approve-web \
+  -- node server.js
+```
+
+Held (`require_approval`) calls wait for a decision in the local dashboard. The proxy prints the exact command to start it; the dashboard startup banner echoes its URL and approval token:
+
+```bash
+agent-firewall dashboard --policy examples/policy.json --state firewall.db
+# Agent Firewall dashboard: http://127.0.0.1:8787
+# Agent Firewall dashboard token: ...
+```
+
+Approve or deny in the browser, or script it with the token against `POST /api/approvals/<call_id>`. The proxy logs lifecycle events (spawned pid, child exit) and held-call guidance on stderr.
+
+## See it stop real attacks
+
+`scripts/demo/attack_demo.py` runs a deliberately vulnerable MCP server behind the proxy and walks six live scenarios in under a second: an allowed query, an octal-encoding SSRF attempt, stacked SQL hiding a DROP, duplicate-key frame smuggling, a held email approved end-to-end through the dashboard API, and a runaway loop cut off by the identical-call budget:
+
+```bash
+.venv/bin/python scripts/demo/attack_demo.py
+```
+
 ## Demo
 
 The recording replays [examples/demo_policy.json](examples/demo_policy.json) against three proposed calls (one allowed, one held for approval, one blocked), each with the policy reason:

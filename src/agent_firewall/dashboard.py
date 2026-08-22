@@ -37,13 +37,16 @@ class Dashboard:
         host: str = "127.0.0.1",
         port: int = 8787,
         token: str | None = None,
+        approval_timeout: float = 300,
     ) -> None:
         if not _is_loopback(host):
             raise ValueError("dashboard host must be a loopback address")
         self.policy = Policy.load(policy_path)
         self.audit_path = audit_path
         self.state = SQLiteStateStore(state_path)
-        self.approvals = SQLiteApprovalQueue(state_path)
+        self.approvals = SQLiteApprovalQueue(
+            state_path, timeout_seconds=approval_timeout
+        )
         self.token = token or secrets.token_urlsafe(32)
         handler = _handler(self)
         self.server = ThreadingHTTPServer((host, port), handler)
@@ -55,8 +58,14 @@ class Dashboard:
             host = host.decode("ascii")
         return f"http://{host}:{port}"
 
+    def startup_banner(self) -> str:
+        return (
+            f"Agent Firewall dashboard: {self.address}\n"
+            f"Agent Firewall dashboard token: {self.token}"
+        )
+
     def serve_forever(self) -> None:
-        print(f"Agent Firewall dashboard: {self.address}", flush=True)
+        print(self.startup_banner(), flush=True)
         self.server.serve_forever()
 
     def close(self) -> None:
@@ -67,12 +76,17 @@ class Dashboard:
         events = read_events(self.audit_path, limit=None)
         counts = Counter(event.get("event") for event in events)
         usage = self.state.usage()
+        visible_pending = self.approvals.pending(
+            max_age_seconds=self.approvals.timeout_seconds
+        )
+        total_pending = self.approvals.pending()
         return {
             "allowed": counts["allowed"] + counts["approval_granted"],
             "blocked": counts["blocked"] + counts["approval_denied"],
             "failed": counts["failed"],
             "near_misses": counts["approval_requested"],
-            "pending_approvals": len(self.approvals.pending()),
+            "pending_approvals": len(visible_pending),
+            "hidden_pending": max(len(total_pending) - len(visible_pending), 0),
             "tool_calls": usage.tool_calls,
             "max_calls": self.policy.budget.max_calls,
             "estimated_cost_usd": str(usage.estimated_cost_usd),
@@ -134,7 +148,10 @@ def _handler(dashboard: Dashboard) -> type[BaseHTTPRequestHandler]:
                     200,
                     {
                         "approvals": [
-                            record.as_dict() for record in dashboard.approvals.pending()
+                            record.as_dict()
+                            for record in dashboard.approvals.pending(
+                                max_age_seconds=dashboard.approvals.timeout_seconds
+                            )
                         ]
                     },
                 )
@@ -269,8 +286,8 @@ h1{font-size:24px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minma
 .card,section{background:#151c30;border:1px solid #29334d;border-radius:10px;padding:16px}
 .value{font-size:28px;font-weight:700}section{margin-top:16px;overflow:auto}
 table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:9px;border-bottom:1px solid #29334d}
-button{border:0;border-radius:6px;padding:7px 10px;margin-right:6px;cursor:pointer}
-.approve{background:#45d483}.deny{background:#ff6b6b}.muted{color:#9ba8c7}
+button{border:0;border-radius:6px;padding:7px 10px;margin-right:6px;cursor:pointer;font-weight:600}
+.approve{background:#45d483;color:#06251a}.deny{background:#ff6b6b;color:#330b0b}.muted{color:#9ba8c7}
 </style>
 </head>
 <body>
@@ -278,19 +295,33 @@ button{border:0;border-radius:6px;padding:7px 10px;margin-right:6px;cursor:point
 <div class="grid" id="summary"></div>
 <section><h2>Pending approvals</h2><table><tbody id="approvals"></tbody></table></section>
 <section><h2>Recent events</h2><table><thead><tr><th>Time</th><th>Event</th><th>Tool</th><th>Reason</th></tr></thead><tbody id="events"></tbody></table></section>
-<p class="muted" id="status"></p>
+<div id="alert" role="alert"></div>
+<p class="muted" id="updated"></p>
 <script nonce="__NONCE__">
 const token="__TOKEN__";
 const text=(tag,value)=>{const node=document.createElement(tag);node.textContent=value??"—";return node};
-async function decide(id,decision){await fetch("/api/approvals/"+encodeURIComponent(id),{method:"POST",headers:{"Content-Type":"application/json","X-Agent-Firewall-Token":token},body:JSON.stringify({decision})});await load()}
+async function decide(id,decision){
+ const alertBox=document.querySelector("#alert");
+ try{
+  const res=await fetch("/api/approvals/"+encodeURIComponent(id),{method:"POST",headers:{"Content-Type":"application/json","X-Agent-Firewall-Token":token},body:JSON.stringify({decision})});
+  if(!res.ok){let msg="HTTP "+res.status;try{const j=await res.json();if(j&&j.error)msg=j.error}catch(e){}
+   alertBox.textContent="Decision failed: "+msg;return}
+  alertBox.textContent="";
+ }catch(err){alertBox.textContent="Network error: "+err;return}
+ await load()}
 async function load(){try{
  const [s,a,e]=await Promise.all(["summary","approvals","events"].map(x=>fetch("/api/"+x).then(r=>r.json())));
  const cards=[["Allowed",s.allowed],["Blocked",s.blocked],["Near misses",s.near_misses],["Pending",s.pending_approvals],["Calls",s.tool_calls+(s.max_calls?"/"+s.max_calls:"")],["Cost","$"+s.estimated_cost_usd+(s.max_cost_usd?"/$"+s.max_cost_usd:"")]];
  const summary=document.querySelector("#summary");summary.replaceChildren(...cards.map(([k,v])=>{const c=text("div","");c.className="card";const n=text("div",v);n.className="value";c.append(n,text("div",k));return c}));
- const approvals=document.querySelector("#approvals");approvals.replaceChildren(...a.approvals.map(x=>{const r=document.createElement("tr");r.append(text("td",x.tool),text("td",x.reason));const actions=document.createElement("td");for(const d of ["approved","denied"]){const b=text("button",d==="approved"?"Approve":"Deny");b.className=d==="approved"?"approve":"deny";b.onclick=()=>decide(x.call_id,d);actions.append(b)}r.append(actions);return r}));
+ const active=document.activeElement;
+ const focusKey=(active&&active.dataset&&active.dataset.cid)?active.dataset.cid+"|"+active.dataset.decision:null;
+ const approvals=document.querySelector("#approvals");
+ approvals.replaceChildren(...a.approvals.map(x=>{const r=document.createElement("tr");r.append(text("td",x.tool),text("td",x.reason));const actions=document.createElement("td");for(const d of ["approved","denied"]){const b=text("button",d==="approved"?"Approve":"Deny");b.className=d==="approved"?"approve":"deny";b.dataset.cid=x.call_id;b.dataset.decision=d;b.setAttribute("aria-label",d+" "+x.tool);b.onclick=()=>decide(x.call_id,d);actions.append(b)}r.append(actions);return r}));
+ if(s.hidden_pending>0){const note=document.createElement("tr");const c=text("td",s.hidden_pending+" older held call(s) hidden");c.colSpan=3;c.className="muted";note.append(c);approvals.append(note)}
+ if(focusKey){const target=[...approvals.querySelectorAll("button")].find(b=>b.dataset.cid+"|"+b.dataset.decision===focusKey);if(target)target.focus()}
  const events=document.querySelector("#events");events.replaceChildren(...e.events.slice().reverse().map(x=>{const r=document.createElement("tr");r.append(text("td",x.timestamp),text("td",x.event),text("td",x.tool),text("td",x.reason));return r}));
- document.querySelector("#status").textContent="Updated "+new Date().toLocaleTimeString();
-}catch(error){document.querySelector("#status").textContent=String(error)}}
+ document.querySelector("#updated").textContent="Updated "+new Date().toLocaleTimeString();
+}catch(error){document.querySelector("#alert").textContent=String(error)}}
 load();setInterval(load,1500);
 </script>
 </body>

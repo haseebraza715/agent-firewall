@@ -113,24 +113,71 @@ async def _read_child_line(
         line.extend(chunk)
 
 
-class TerminalApprover:
-    async def __call__(self, call: ToolCall, decision: Decision) -> bool:
-        return await asyncio.to_thread(self._prompt, call, decision)
+_ARGS_PREVIEW_LIMIT = 120
 
-    @staticmethod
-    def _prompt(call: ToolCall, decision: Decision) -> bool:
+
+def _args_preview(call: ToolCall) -> str:
+    try:
+        text = json.dumps(call.arguments, ensure_ascii=False, default=repr)
+    except (TypeError, ValueError):
+        text = repr(call.arguments)
+    if len(text) > _ARGS_PREVIEW_LIMIT:
+        text = text[: _ARGS_PREVIEW_LIMIT - 3] + "..."
+    return text
+
+
+class TerminalApprover:
+    """Interactive [y/N] approval on the controlling terminal.
+
+    The prompt shows the tool, its arguments, and the policy reason so a
+    human decides with the same data the policy saw. Anything other than
+    y/yes denies; garbage input gets one retry before denial.
+    """
+
+    async def __call__(self, call: ToolCall, decision: Decision) -> bool:
+        return await asyncio.to_thread(self._decide, call, decision)
+
+    def _decide(self, call: ToolCall, decision: Decision) -> bool:
         path = "CON" if os.name == "nt" else "/dev/tty"
         try:
             with open(path, "r+", encoding="utf-8") as terminal:
-                terminal.write(f"{call.name}: {decision.reason}. Approve? [y/N] ")
-                terminal.flush()
-                return terminal.readline().strip().lower() == "y"
+                return self._prompt(call, decision, terminal)
         except OSError:
             print(
                 "agent-firewall: no terminal available for approval",
                 file=sys.stderr,
             )
             return False
+
+    @staticmethod
+    def _prompt(
+        call: ToolCall,
+        decision: Decision,
+        terminal: Any,
+    ) -> bool:
+        prompt = (
+            f"agent-firewall approval\n"
+            f"  tool: {call.name}\n"
+            f"  arguments: {_args_preview(call)}\n"
+            f"  reason: {decision.reason}\n"
+            f"  Approve? [y/N] "
+        )
+        for _ in range(2):
+            terminal.write(prompt)
+            try:
+                answer = terminal.readline().strip().lower()
+            except EOFError:
+                print("agent-firewall: approval input ended; denied", file=sys.stderr)
+                return False
+            if answer in ("y", "yes"):
+                return True
+            if answer in ("n", "no"):
+                return False
+            if answer == "":
+                print("agent-firewall: approval input ended; denied", file=sys.stderr)
+                return False
+            prompt = "Answer y or n. Approve? [y/N] "
+        return False
 
 
 class McpStdioProxy:
@@ -140,6 +187,7 @@ class McpStdioProxy:
         command: Sequence[str],
         request_timeout: float = 300,
         max_line_bytes: int = DEFAULT_MAX_LINE_BYTES,
+        hold_hint: str | None = None,
     ) -> None:
         if command and command[0] == "--":
             command = command[1:]
@@ -153,12 +201,14 @@ class McpStdioProxy:
         self.command = list(command)
         self.request_timeout = request_timeout
         self.max_line_bytes = max_line_bytes
+        self.hold_hint = hold_hint
         self.process: asyncio.subprocess.Process | None = None
         self.pending: dict[str, asyncio.Future[Mapping[str, Any]]] = {}
         self._client_pending: set[str] = set()
         self._request_sequence = 0
         self._internal_id_prefix = f"agent-firewall:{secrets.token_hex(16)}:"
         self._child_failure: str | None = None
+        self._hold_hint_shown = False
         # Construct lazily inside the running loop. Python 3.9 binds asyncio
         # primitives at construction time, and callers may build the proxy
         # before entering asyncio.run().
@@ -169,6 +219,12 @@ class McpStdioProxy:
             *self.command,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
+        )
+        print(
+            f"agent-firewall: spawned {' '.join(self.command)} "
+            f"(pid {self.process.pid})",
+            file=sys.stderr,
+            flush=True,
         )
         child_reader = asyncio.create_task(self._read_child())
         requests: list[asyncio.Task[None]] = []
@@ -194,7 +250,13 @@ class McpStdioProxy:
                 except (BrokenPipeError, ConnectionResetError):
                     pass
             await child_reader
-        return await self.process.wait()
+        returncode = await self.process.wait()
+        print(
+            f"agent-firewall: child exited rc={returncode}",
+            file=sys.stderr,
+            flush=True,
+        )
+        return returncode
 
     async def _handle_client_line(self, line: bytes) -> None:
         try:
@@ -270,6 +332,13 @@ class McpStdioProxy:
             )
         except FirewallError as exc:
             if isinstance(exc, ApprovalRequired):
+                if self.hold_hint and not self._hold_hint_shown:
+                    print(
+                        f"agent-firewall: {self.hold_hint}",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                    self._hold_hint_shown = True
                 text = "tool call requires approval but no approver is configured"
             else:
                 text = "Tool call blocked by Agent Firewall"
@@ -536,6 +605,11 @@ class McpStdioProxy:
         self._child_failure = (
             "wrapped MCP server terminated after a stalled stdin write"
         )
+        print(
+            "agent-firewall: aborted wrapped MCP server after stalled write",
+            file=sys.stderr,
+            flush=True,
+        )
         if self.process is None:
             return
         child_stdin = self.process.stdin
@@ -608,10 +682,23 @@ async def run_mcp_proxy(
             state_path,
             timeout_seconds=approval_timeout,
         )
+        print(
+            "agent-firewall: approvals come from the dashboard; start it with: "
+            f"agent-firewall dashboard --policy {policy_path} "
+            f"--state {state_path}" + (f" --audit {audit_path}" if audit_path else ""),
+            file=sys.stderr,
+            flush=True,
+        )
+        hold_hint = None
     elif approve_terminal:
         approver = TerminalApprover()
+        hold_hint = None
     else:
         approver = None
+        hold_hint = (
+            "call held but no approver is configured; restart with "
+            "--approve-terminal or --approve-web"
+        )
     firewall = Firewall.from_policy_file(
         policy_path,
         approver=approver,
@@ -623,6 +710,7 @@ async def run_mcp_proxy(
         command,
         request_timeout=request_timeout,
         max_line_bytes=max_line_bytes,
+        hold_hint=hold_hint,
     ).run()
 
 

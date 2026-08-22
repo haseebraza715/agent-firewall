@@ -145,5 +145,53 @@ class QueueValidationTests(unittest.TestCase):
                         SQLiteApprovalQueue(path, poll_seconds=poll)
 
 
+class PendingAgeGateTests(unittest.TestCase):
+    def _queue_with_two_rows(self, path):
+        from agent_firewall import Decision, DecisionKind
+
+        queue = SQLiteApprovalQueue(path)
+        for tool in ("fresh.tool", "stale.tool"):
+            call = ToolCall.create(name=tool)
+            decision = Decision(
+                kind=DecisionKind.REQUIRE_APPROVAL, reason="r", code="rule"
+            )
+            queue.request(call, decision)
+        connection = __import__("sqlite3").connect(str(path))
+        stale_call_id = queue.pending()[-1].call_id
+        connection.execute(
+            "UPDATE approvals SET requested_at = ? WHERE call_id = ?",
+            ("2000-01-01T00:00:00+00:00", stale_call_id),
+        )
+        connection.commit()
+        connection.close()
+        return queue
+
+    def test_max_age_hides_orphaned_rows(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "state.db"
+            queue = self._queue_with_two_rows(path)
+            self.assertEqual(len(queue.pending()), 2)
+
+            visible = queue.pending(max_age_seconds=300)
+            self.assertEqual([r.tool for r in visible], ["fresh.tool"])
+
+    def test_unparseable_timestamps_stay_visible(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "state.db"
+            queue = self._queue_with_two_rows(path)
+            connection = __import__("sqlite3").connect(str(path))
+            fresh_id = next(
+                r.call_id for r in queue.pending() if r.tool == "fresh.tool"
+            )
+            connection.execute(
+                "UPDATE approvals SET requested_at = 'garbage' WHERE call_id = ?",
+                (fresh_id,),
+            )
+            connection.commit()
+            connection.close()
+            visible = queue.pending(max_age_seconds=300)
+            self.assertEqual([r.tool for r in visible], ["fresh.tool"])
+
+
 if __name__ == "__main__":
     unittest.main()
