@@ -1,0 +1,56 @@
+name: Bug report
+description: Report a reproducible Agent Firewall problem.
+title: "[bug]: "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened?
+      description: Describe the bug and the impact.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction steps
+      description: Include commands, policy snippets, MCP config, and inputs.
+      placeholder: |
+        1. Run ...
+        2. Send ...
+        3. See ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Agent Firewall version or commit
+      placeholder: 0.2.0 or git SHA
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, Python version, MCP client, wrapped server, and install method.
+      placeholder: macOS 15, Python 3.13, Claude Desktop, @modelcontextprotocol/server-filesystem
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or JSON-RPC frames
+      description: Redact secrets and personal data.
+      render: text

@@ -49,6 +49,138 @@ The output is machine-readable:
 Exit codes are `0` for allow, `3` for approval required, `4` for block, and `2`
 for invalid input.
 
+## Protect your agent in 5 minutes
+
+Create a starter policy and have Agent Firewall print the MCP config wrapper:
+
+```bash
+agent-firewall init \
+  --policy /absolute/path/agent-firewall-policy.json \
+  --audit /absolute/path/agent-firewall-audit.jsonl \
+  --state /absolute/path/agent-firewall.db \
+  --server-name filesystem-protected \
+  -- npx -y @modelcontextprotocol/server-filesystem /absolute/path/to/allowed-folder
+```
+
+The generated policy blocks by default, keeps call budgets enabled, hashes
+arguments in audit logs, allows common read-only verbs, and requires human
+approval for destructive verbs such as write, create, update, delete, remove,
+send, run, execute, and shell.
+
+Claude Desktop (`claude_desktop_config.json`):
+
+```json
+{
+  "mcpServers": {
+    "filesystem-protected": {
+      "command": "agent-firewall",
+      "args": [
+        "mcp",
+        "--policy",
+        "/absolute/path/agent-firewall-policy.json",
+        "--audit",
+        "/absolute/path/agent-firewall-audit.jsonl",
+        "--state",
+        "/absolute/path/agent-firewall.db",
+        "--approve-terminal",
+        "--",
+        "npx",
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "/absolute/path/to/allowed-folder"
+      ]
+    }
+  }
+}
+```
+
+Claude Code:
+
+```bash
+claude mcp add --transport stdio filesystem-protected -- \
+  agent-firewall mcp \
+    --policy /absolute/path/agent-firewall-policy.json \
+    --audit /absolute/path/agent-firewall-audit.jsonl \
+    --state /absolute/path/agent-firewall.db \
+    --approve-terminal \
+    -- npx -y @modelcontextprotocol/server-filesystem /absolute/path/to/allowed-folder
+```
+
+Project-scoped Claude Code `.mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "filesystem-protected": {
+      "command": "agent-firewall",
+      "args": [
+        "mcp",
+        "--policy",
+        "/absolute/path/agent-firewall-policy.json",
+        "--audit",
+        "/absolute/path/agent-firewall-audit.jsonl",
+        "--state",
+        "/absolute/path/agent-firewall.db",
+        "--approve-terminal",
+        "--",
+        "npx",
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "/absolute/path/to/allowed-folder"
+      ]
+    }
+  }
+}
+```
+
+Cursor (`.cursor/mcp.json` in a project, or the global Cursor MCP config):
+
+```json
+{
+  "mcpServers": {
+    "filesystem-protected": {
+      "command": "agent-firewall",
+      "args": [
+        "mcp",
+        "--policy",
+        "/absolute/path/agent-firewall-policy.json",
+        "--audit",
+        "/absolute/path/agent-firewall-audit.jsonl",
+        "--state",
+        "/absolute/path/agent-firewall.db",
+        "--approve-terminal",
+        "--",
+        "npx",
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "/absolute/path/to/allowed-folder"
+      ]
+    }
+  }
+}
+```
+
+On Windows, use `cmd` for the wrapped `npx` command inside `args`:
+
+```json
+{
+  "command": "agent-firewall",
+  "args": [
+    "mcp",
+    "--policy",
+    "C:\\Users\\you\\agent-firewall-policy.json",
+    "--approve-terminal",
+    "--",
+    "cmd",
+    "/c",
+    "npx",
+    "-y",
+    "@modelcontextprotocol/server-filesystem",
+    "C:\\Users\\you\\Desktop"
+  ]
+}
+```
+
 ## Guard a real tool
 
 ```python

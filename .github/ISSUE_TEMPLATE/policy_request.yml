@@ -1,0 +1,44 @@
+name: Policy request
+description: Request a policy pattern for a tool, MCP server, or workflow.
+title: "[policy]: "
+labels: ["policy"]
+body:
+  - type: textarea
+    id: goal
+    attributes:
+      label: What should the policy protect?
+      description: Describe the agent, server, tools, and workflow.
+    validations:
+      required: true
+  - type: textarea
+    id: tools
+    attributes:
+      label: Tool names and arguments
+      description: Include example tool names and redacted arguments.
+      render: json
+    validations:
+      required: true
+  - type: dropdown
+    id: desired_decision
+    attributes:
+      label: Desired default outcome
+      options:
+        - allow
+        - require_approval
+        - block
+        - not sure
+    validations:
+      required: true
+  - type: textarea
+    id: risks
+    attributes:
+      label: Risks to control
+      description: Examples include file writes, external sends, spend, deletes, shell execution, or repeated calls.
+    validations:
+      required: true
+  - type: textarea
+    id: draft
+    attributes:
+      label: Draft policy
+      description: Share any policy you already tried.
+      render: json

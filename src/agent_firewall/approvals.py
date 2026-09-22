@@ -55,7 +55,20 @@ class SQLiteApprovalQueue:
         self._initialize()
 
     async def __call__(self, call: ToolCall, decision: Decision) -> bool:
-        return await asyncio.to_thread(self.wait, call, decision)
+        await asyncio.to_thread(self.request, call, decision)
+        deadline = asyncio.get_running_loop().time() + self.timeout_seconds
+        while asyncio.get_running_loop().time() < deadline:
+            record = await asyncio.to_thread(self.get, call.id)
+            if record.status != "pending":
+                return record.status == "approved"
+            await asyncio.sleep(self.poll_seconds)
+
+        try:
+            await asyncio.to_thread(self.decide, call.id, "denied")
+        except ApprovalConflict:
+            pass
+        record = await asyncio.to_thread(self.get, call.id)
+        return record.status == "approved"
 
     def wait(self, call: ToolCall, decision: Decision) -> bool:
         self.request(call, decision)

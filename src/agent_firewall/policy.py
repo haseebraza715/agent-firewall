@@ -43,10 +43,12 @@ class Policy:
         try:
             raw = json.loads(path.read_text(encoding="utf-8"))
         except OSError as exc:
-            raise PolicyConfigError(f"cannot read policy: {exc}") from exc
+            raise PolicyConfigError(
+                f"cannot read policy at {path}: run agent-firewall init --policy {path}"
+            ) from exc
         except json.JSONDecodeError as exc:
             raise PolicyConfigError(
-                f"invalid JSON at line {exc.lineno}, column {exc.colno}"
+                f"invalid policy JSON at line {exc.lineno}, column {exc.colno}"
             ) from exc
         return cls.from_dict(raw)
 

@@ -1,0 +1,50 @@
+name: Incident report
+description: Share an agent/tool incident that Agent Firewall should catch.
+title: "[incident]: "
+labels: ["incident"]
+body:
+  - type: textarea
+    id: what_happened
+    attributes:
+      label: What happened?
+      description: Describe the unwanted agent action or near miss.
+    validations:
+      required: true
+  - type: input
+    id: source
+    attributes:
+      label: Source
+      description: Link to the public issue, advisory, post, or internal reference.
+      placeholder: https://...
+    validations:
+      required: true
+  - type: textarea
+    id: tool_calls
+    attributes:
+      label: Tool calls involved
+      description: Include tool names and redacted arguments when possible.
+      render: json
+  - type: textarea
+    id: policy
+    attributes:
+      label: Which policy would catch it?
+      description: Share the smallest allow/block/approval rule or budget that would have stopped or paused the action.
+      render: json
+    validations:
+      required: true
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Severity
+      options:
+        - Low
+        - Medium
+        - High
+        - Critical
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: Additional notes
+      description: Add context, constraints, or related incidents.
