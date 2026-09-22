@@ -542,5 +542,39 @@ class HoldHintTests(unittest.TestCase):
         self.assertEqual(err.getvalue(), "")
 
 
+class LookalikeMethodTests(unittest.TestCase):
+    BLOCKED_POLICY = {"default_decision": "block"}
+
+    def _send(self, method):
+        proxy = _proxy(self.BLOCKED_POLICY)
+        return _call(
+            proxy,
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": method,
+                "params": {"name": "danger", "arguments": {}},
+            },
+        )
+
+    def test_lookalike_methods_are_policed_not_forwarded(self):
+        for method in (
+            "TOOLS/CALL",
+            "Tools/Call",
+            " tools/call",
+            "tools/call ",
+            "tools\t/\tcall".replace("\t", " "),
+            "tools//call",
+        ):
+            with self.subTest(method=method):
+                written = self._send(method)
+                self.assertIsNotNone(written, f"{method!r} was forwarded")
+                if "error" in written:
+                    self.assertEqual(written["error"]["code"], -32001)
+
+    def test_exact_method_still_policed_and_other_methods_still_pass(self):
+        self.assertEqual(self._send("tools/call")["error"]["code"], -32001)
+
+
 if __name__ == "__main__":
     unittest.main()
