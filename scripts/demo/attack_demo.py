@@ -1,16 +1,17 @@
-"""Live attack demo: run real attacks through a real agent-firewall proxy.
+"""Offline attack demo: check proposed calls through the real proxy and a local stub.
 
 Everything here is real product machinery: the stdio MCP proxy polices calls
 to a deliberately vulnerable "evil tools" server, budgets cap a runaway loop,
 and a held call is approved through the localhost dashboard API. Offline,
-deterministic, self-cleaning. Requires only the repo checkout and curl-free
-stdlib networking.
+deterministic, with saved execution evidence. Requires only the repo checkout
+and stdlib networking.
 
-Usage: .venv/bin/python scripts/demo/attack_demo.py
+Usage: .venv/bin/python scripts/demo/attack_demo.py --output /path/to/new-directory
 """
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import shutil
@@ -23,7 +24,6 @@ import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-PORT = 8899
 TOKEN = "demo-token-not-secret"
 
 POLICY = {
@@ -34,13 +34,23 @@ POLICY = {
             "tool": "database.query",
             "arguments": {"sql": {"operator": "sql", "equals": "SELECT"}},
             "decision": "allow",
-            "reason": "read-only SQL only",
+            "reason": (
+                "single SELECT statements are allowed; "
+                "database permissions must enforce read-only access"
+            ),
         },
         {
             "tool": "web.fetch",
-            "arguments": {"url": {"operator": "url", "deny_private_networks": True}},
+            "arguments": {
+                "url": {
+                    "operator": "url",
+                    "scheme": ["http", "https"],
+                    "hostname": "*",
+                    "deny_private_networks": True,
+                }
+            },
             "decision": "allow",
-            "reason": "public web fetches only",
+            "reason": "HTTP(S) with no private literal IP; DNS and redirects unchecked",
         },
         {
             "tool": "email.send",
@@ -52,6 +62,8 @@ POLICY = {
 
 EVIL_SERVER = """\
 import json, sys
+from pathlib import Path
+receipts = Path(sys.argv[1])
 for line in sys.stdin:
     try:
         message = json.loads(line)
@@ -59,6 +71,8 @@ for line in sys.stdin:
         continue
     if not isinstance(message, dict) or "id" not in message:
         continue
+    with receipts.open("a") as handle:
+        handle.write(json.dumps(message) + "\\n")
     params = message.get("params") if isinstance(message.get("params"), dict) else {}
     name = str(params.get("name"))
     result = {"content": [{"type": "text", "text": "EXECUTED " + name}]}
@@ -89,6 +103,15 @@ def show(response_line: str) -> dict:
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--output", type=Path, help="new directory for execution evidence"
+    )
+    args = parser.parse_args()
+    output = args.output or Path(tempfile.mkdtemp(prefix="af-demo-evidence-"))
+    if args.output:
+        output.mkdir(parents=True, exist_ok=False)
+    exchanges = []
     workdir = Path(tempfile.mkdtemp(prefix="af-attack-demo-"))
     policy_path = workdir / "policy.json"
     policy_path.write_text(json.dumps(POLICY, indent=2), encoding="utf-8")
@@ -96,6 +119,7 @@ def main() -> int:
     child_path.write_text(EVIL_SERVER, encoding="utf-8")
     state_path = workdir / "firewall.db"
     audit_path = workdir / "audit.jsonl"
+    receipts_path = workdir / "child-receipts.jsonl"
 
     env = dict(os.environ)
     env["PYTHONPATH"] = str(ROOT / "src")
@@ -118,6 +142,7 @@ def main() -> int:
         "--",
         sys.executable,
         str(child_path),
+        str(receipts_path),
     ]
     proc = subprocess.Popen(
         proxy_cmd,
@@ -145,17 +170,27 @@ def main() -> int:
             print(f"\n[client ->] {line[:110]}")
             proc.stdin.write(line + "\n")
             proc.stdin.flush()
-            return show(proc.stdout.readline())
+            response = show(proc.stdout.readline())
+            exchanges.append({"request": line, "response": response})
+            return response
 
         head("1. Legitimate call is allowed")
-        call(1, "database.query", {"sql": "SELECT id FROM users"})
+        assert "result" in call(1, "database.query", {"sql": "SELECT id FROM users"})
 
         head("2. Legacy-encoding SSRF attempt (octal 127.0.0.1)")
-        call(2, "web.fetch", {"url": "http://017700000001/admin"})
+        assert (
+            call(2, "web.fetch", {"url": "http://017700000001/admin"})["error"]["code"]
+            == -32001
+        )
         note("octal 127.0.0.1 does not slip past the private-network gate")
 
         head("3. Destructive statement hidden behind SELECT")
-        call(3, "database.query", {"sql": "SELECT 1; DROP TABLE users"})
+        assert (
+            call(3, "database.query", {"sql": "SELECT 1; DROP TABLE users"})["error"][
+                "code"
+            ]
+            == -32001
+        )
         note("stacked statements never match a read-only rule")
 
         head("4. JSON-RPC duplicate-key smuggling")
@@ -169,7 +204,7 @@ def main() -> int:
         assert "duplicate key" in smuggle["error"]["message"]
         note("ambiguous bytes are answered with a parse error, never forwarded")
 
-        head("5. Held call approved by a human via the dashboard")
+        head("5. Held call approved by a scripted dashboard decision")
         request_line = json.dumps(
             {
                 "jsonrpc": "2.0",
@@ -199,7 +234,7 @@ def main() -> int:
                 "--state",
                 str(state_path),
                 "--port",
-                str(PORT),
+                "0",
                 "--token",
                 TOKEN,
             ],
@@ -209,21 +244,35 @@ def main() -> int:
             stderr=subprocess.DEVNULL,
             text=True,
         )
-        for _ in range(40):
-            try:
-                urllib.request.urlopen(
-                    f"http://127.0.0.1:{PORT}/api/summary", timeout=1
-                )
+        address = (
+            dashboard.stdout.readline()
+            .strip()
+            .removeprefix("Agent Firewall dashboard: ")
+        )
+        dashboard.stdout.readline()  # Discard the local demo token banner.
+        for _ in range(100):
+            approvals = json.load(
+                urllib.request.urlopen(f"{address}/api/approvals", timeout=5)
+            )
+            if approvals["approvals"]:
                 break
-            except Exception:
-                time.sleep(0.25)
-        approvals = json.load(
-            urllib.request.urlopen(f"http://127.0.0.1:{PORT}/api/approvals", timeout=5)
+            time.sleep(0.02)
+        assert approvals["approvals"], "email never entered the approval queue"
+        before_approval = [
+            json.loads(line) for line in receipts_path.read_text().splitlines()
+        ]
+        assert len(before_approval) == 1
+        assert before_approval[0]["params"]["name"] == "database.query"
+        (output / "pending-approval.json").write_text(
+            json.dumps(
+                {"approvals": approvals, "child_receipts": before_approval}, indent=2
+            )
+            + "\n"
         )
         call_id = approvals["approvals"][0]["call_id"]
         note(f"pending approval {call_id[:12]}... approving via dashboard API")
         request = urllib.request.Request(
-            f"http://127.0.0.1:{PORT}/api/approvals/{call_id}",
+            f"{address}/api/approvals/{call_id}",
             data=json.dumps({"decision": "approved"}).encode(),
             method="POST",
             headers={
@@ -233,13 +282,18 @@ def main() -> int:
         )
         urllib.request.urlopen(request, timeout=5)
         approved_response = show(proc.stdout.readline())
+        exchanges.append({"request": request_line, "response": approved_response})
         assert "result" in approved_response, (
             "approved call must execute after human sign-off"
         )
 
         head("6. Runaway loop capped by identical-call budget")
         for attempt in range(3):
-            call(600 + attempt, "web.fetch", {"url": "https://example.com/"})
+            response = call(600 + attempt, "web.fetch", {"url": "https://example.com/"})
+            if attempt < 2:
+                assert "result" in response
+            else:
+                assert response["error"]["data"]["code"] == "max_identical_calls"
         note("third identical fetch hits max_identical_calls=2 and is blocked")
 
         head("Audit trail recorded during this session")
@@ -250,7 +304,32 @@ def main() -> int:
         for name, count in sorted(counts.items()):
             print(f"    {name:<20} x{count}")
 
-        head("All attacks handled by policy. Nothing dangerous executed.")
+        receipts = [json.loads(line) for line in receipts_path.read_text().splitlines()]
+        assert [item["params"] for item in receipts] == [
+            {"name": "database.query", "arguments": {"sql": "SELECT id FROM users"}},
+            {"name": "email.send", "arguments": {"to": "customer@example.com"}},
+            {"name": "web.fetch", "arguments": {"url": "https://example.com/"}},
+            {"name": "web.fetch", "arguments": {"url": "https://example.com/"}},
+        ]
+        assert counts["approval_requested"] == counts["approval_granted"] == 1
+        (output / "exchanges.json").write_text(json.dumps(exchanges, indent=2) + "\n")
+        for path in (policy_path, audit_path, receipts_path):
+            shutil.copy2(path, output / path.name)
+        (output / "summary.json").write_text(
+            json.dumps(
+                {
+                    "passed": True,
+                    "child_executions": len(receipts),
+                    "pending_email_executions": 0,
+                    "approved_email_executions": 1,
+                    "events": counts,
+                    "boundary": "real proxy, local receipt-only stub",
+                },
+                indent=2,
+            )
+            + "\n"
+        )
+        head(f"Verified stub executions. Evidence saved to {output}")
     finally:
         if proc.poll() is None:
             proc.stdin.close()
@@ -258,12 +337,14 @@ def main() -> int:
                 proc.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 proc.kill()
+                proc.wait(timeout=5)
         if dashboard is not None and dashboard.poll() is None:
             dashboard.terminate()
             try:
                 dashboard.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 dashboard.kill()
+                dashboard.wait(timeout=5)
         shutil.rmtree(workdir, ignore_errors=True)
     return 0
 
