@@ -112,7 +112,7 @@ def compile(pattern: Any, where: str = "matcher") -> None:
     if not isinstance(pattern, dict):
         raise ValueError("a typed matcher must be an object")
     operator = pattern.get("operator")
-    if operator not in OPERATORS:
+    if not isinstance(operator, str) or operator not in OPERATORS:
         known = ", ".join(sorted(OPERATORS))
         raise ValueError(
             f"unknown matcher operator {operator!r} (expected one of: {known})"
