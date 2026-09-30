@@ -135,18 +135,25 @@ class SQLiteStateStore:
         row = connection.execute(
             "SELECT tool_calls, estimated_cost_usd FROM run_usage WHERE id = 1"
         ).fetchone()
-        if row is None or not isinstance(row[0], int):
+        if row is None or not isinstance(row[0], int) or row[0] < 0:
             raise StorageError("firewall state is missing or corrupted")
         try:
             estimated_cost_usd = Decimal(row[1])
         except (InvalidOperation, TypeError, ValueError) as exc:
             raise StorageError("firewall state cost record is corrupted") from exc
+        if not estimated_cost_usd.is_finite() or estimated_cost_usd < 0:
+            raise StorageError("firewall state cost record is corrupted")
         tools: dict[str, int] = dict(
             connection.execute("SELECT tool, call_count FROM tool_usage")
         )
         fingerprints: dict[str, int] = dict(
             connection.execute("SELECT fingerprint, call_count FROM fingerprint_usage")
         )
+        if any(
+            not isinstance(count, int) or count < 0
+            for count in (*tools.values(), *fingerprints.values())
+        ):
+            raise StorageError("firewall state count record is corrupted")
         return Usage(
             tool_calls=row[0],
             estimated_cost_usd=estimated_cost_usd,
