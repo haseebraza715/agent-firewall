@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Callable, Union
 
 from .audit import JsonlAuditLog
-from .exceptions import ApprovalRequired, AuditWriteError, ToolCallBlocked
+from .exceptions import ApprovalRequired, AuditWriteError, StorageError, ToolCallBlocked
 from .models import Decision, DecisionKind, ToolCall, Usage
 from .policy import Policy
 from .state import MemoryStateStore, SQLiteStateStore, StateStore
@@ -267,7 +267,7 @@ class Firewall:
     ) -> None:
         try:
             self._audit(event, call, decision, error=error)
-        except AuditWriteError as exc:
+        except StorageError as exc:
             raise AuditWriteError(str(exc), after_execution=True) from exc
 
 
