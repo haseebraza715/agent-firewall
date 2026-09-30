@@ -473,8 +473,13 @@ def _within(target: str, actual: str) -> bool:
     return actual == root or actual.startswith(root + "/")
 
 
+_MAILBOX_SEPARATORS = frozenset(",;<>")
+
+
 def _match_domain(pattern: dict[str, Any], value: Any) -> bool:
     if not isinstance(value, str) or "@" not in value:
+        return False
+    if any(char in _MAILBOX_SEPARATORS or char.isspace() for char in value):
         return False
     domain = value.rsplit("@", 1)[1].lower()
     if "equals" in pattern and domain != pattern["equals"].lower():

@@ -71,12 +71,25 @@ symlink resolution, and never expand `~`.
 At least one field is required. `within` is boundary-aware: `/etc` contains
 `/etc/passwd` but not `/etc2/passwd`.
 
+A relative value is rooted at `/`, not at any working directory:
+`workspace/notes.txt` is evaluated as `/workspace/notes.txt` and so matches
+`within: /workspace`, while the tool may resolve it against its own working
+directory. Leading `..` components cannot climb above `/`. If a tool accepts
+relative paths, have it resolve them to absolute paths before the call, or
+add an earlier block rule for values not starting with `/`, for example the
+scalar glob `"path": "[!/]*"`.
+
 ## `domain`
 
 Matches an email address's domain (the part after the last `@`).
 `equals` matches exactly; `suffix` matches the domain itself or any of its
 subdomains. Both are case-insensitive and boundary-aware: `evil-example.com`
 is not a subdomain of `example.com`. A value without `@` never matches.
+The value must be a single bare mailbox such as `a@example.com`: a value
+containing `,`, `;`, `<`, `>` or any whitespace never matches, so recipient
+lists (`b@evil.com,a@example.com`) and display-name forms
+(`A <a@example.com>`) cannot satisfy a rule through their last address. Split
+recipient lists into separate arguments or calls if each needs checking.
 
 | field | value | meaning |
 |---|---|---|

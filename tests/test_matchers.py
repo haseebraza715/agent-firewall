@@ -296,6 +296,22 @@ class DomainMatcherTests(unittest.TestCase):
             match({"operator": "domain", "suffix": "example.com"}, "example.com")
         )
 
+    def test_only_a_single_bare_mailbox_matches(self):
+        pattern = {"operator": "domain", "suffix": "corp.example.com"}
+        self.assertTrue(match(pattern, "a@corp.example.com"))
+        for value in (
+            "b@evil.com,a@corp.example.com",
+            "b@evil.com;a@corp.example.com",
+            "b@evil.com a@corp.example.com",
+            "b@evil.com\ta@corp.example.com",
+            "b@evil.com\na@corp.example.com",
+            "Evil <b@evil.com>@corp.example.com",
+            "<a@corp.example.com>",
+            "a@corp.example.com ",
+        ):
+            with self.subTest(value=value):
+                self.assertFalse(match(pattern, value))
+
 
 class HttpMethodMatcherTests(unittest.TestCase):
     def test_equals_is_case_insensitive(self):
