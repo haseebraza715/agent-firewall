@@ -33,6 +33,34 @@ in scope for the framing, duplicate-key, batch, and timeout defenses, but a
 method that can fetch a URL or read a file without being a `tools/call` is
 not policed today.
 
+## Method contract
+
+The [MCP tools specification](https://modelcontextprotocol.io/specification/2025-06-18/server/tools) defines `tools/call` as the tool invocation method. [JSON-RPC 2.0](https://www.jsonrpc.org/specification) uses case-sensitive matching and does not define aliases for it. The proxy evaluates only the exact string `tools/call`; it never normalizes a method and forwards the rewritten call.
+
+As a local hardening rule, the proxy reserves and rejects strings that fully match ASCII case-insensitive `tools`, then one or more adjacent `/` characters, then `call`, with optional ASCII whitespace before/after the whole name and around the slash group. Whitespace means space, tab, CR, LF, form feed or vertical tab. Examples are `TOOLS/CALL`, ` tools/call `, `tools / call` and `tools//call`. Requests receive method-not-found `-32601` with the original id; notifications are dropped without a response. These are method errors, not policy decisions, so they do not reserve budget or create policy audit records.
+
+This bounded reservation is a proxy compatibility restriction, not a JSON-RPC ban on arbitrary extension names. Other names pass through unchanged, including `tools/list`, `tools/callback`, `tools/call/extension` and `vendor/tools/call`. Unicode lookalikes, percent encodings, whitespace inside `tools` or `call`, and separated slash groups are outside this reservation. A supported child must invoke tools only for exact `tools/call`, without further method normalization or tool-executing extensions. Inspect a child's dispatch behavior before relying on this boundary. A server that executes tools via other methods can bypass the policy by design.
+
+The original missing-child assertion showed that aliases reached the forwarding path. The receipt-based subprocess regression proves delivery to a local test child on the baseline and rejection after the fix. Neither establishes an alias bypass against a spec-compliant third-party server.
+
+## Evidence and recovery limits
+
+Python wrappers evaluate supplied arguments and omitted signature defaults. The same effective arguments identify repetition fingerprints and audit records. Opaque tools whose signatures cannot be inspected retain the documented positional fallback.
+
+Older wrapper fingerprints omitted defaults. Those stored hashes cannot be reconstructed into effective-argument identities without additional history. Reusing such state can therefore permit an extra identical call after this correction, although global and per-tool counters remain stored. A state-version or conservative migration policy must be chosen before promising identical-call continuity across that transition. Preserve historical state; do not silently reset budgets.
+
+The MCP proxy records JSON-RPC tool-request errors and tool results with `isError: true` as `failed`, while forwarding the original response. Such attempts still consume reserved budgets. `failed` does not establish that a tool had no side effects. A normal response produces `executed`; the firewall cannot independently verify a server's claimed result. Notifications have no returned outcome to inspect.
+
+Audit paths require read and append access. An existing log whose last byte is not a newline is an incomplete record: the writer refuses to append, preserves its bytes and prevents the next tool operation. Preserve that log for investigation and configure a new audit path; do not discard the state database to retry, because reserved budgets remain consumed. A storage failure while collecting terminal usage or writing terminal evidence reports that the tool was attempted and its result could not be audited, rather than claiming no execution.
+
+Persisted counters must be nonnegative integers and persisted cost must be finite and nonnegative. Invalid saved fields raise `StorageError` before policy evaluation. This detects malformed state; it does not authenticate state or protect against trusted same-user actors editing plausible positive values.
+
+Benchmark thresholds use unrounded rates derived from confusion counts; the report retains rounded display rates. A displayed zero or one does not erase a rare incorrect decision from the gate. These internally authored benchmark cases still do not establish independent security accuracy.
+
+Cost addition currently uses the caller's Decimal context. High-precision fractional costs can round away during projected-cost checks and persistence, and a reduced context precision can affect ordinary amounts. Until a bounded exact monetary representation is selected, cost caps are not strict accounting for every accepted finite decimal. Call and repetition caps are separate from this limitation. Estimated costs also remain unverified client assertions.
+
+The web approval queue deliberately omits tool arguments from its stored records and HTTP output. A dashboard approval alone does not establish that a human reviewed the recipient, command or other proposed arguments. Use a trusted callback or terminal approver with input context when that review is required. Exposing input context through the dashboard needs an explicit privacy/storage decision.
+
 ## Assets
 
 - **Tool-call authorization.** No guarded tool executes without a decision.
