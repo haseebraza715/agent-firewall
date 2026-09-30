@@ -557,22 +557,21 @@ class LookalikeMethodTests(unittest.TestCase):
             },
         )
 
-    def test_lookalike_methods_are_policed_not_forwarded(self):
+    def test_lookalike_methods_are_rejected_not_forwarded(self):
         for method in (
             "TOOLS/CALL",
             "Tools/Call",
             " tools/call",
             "tools/call ",
-            "tools\t/\tcall".replace("\t", " "),
+            "tools / call",
             "tools//call",
         ):
             with self.subTest(method=method):
                 written = self._send(method)
                 self.assertIsNotNone(written, f"{method!r} was forwarded")
-                if "error" in written:
-                    self.assertEqual(written["error"]["code"], -32001)
+                self.assertEqual(written["error"]["code"], -32601)
 
-    def test_exact_method_still_policed_and_other_methods_still_pass(self):
+    def test_exact_method_still_policed(self):
         self.assertEqual(self._send("tools/call")["error"]["code"], -32001)
 
 

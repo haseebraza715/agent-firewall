@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import secrets
 import sys
 from collections.abc import Mapping, Sequence
@@ -18,11 +19,17 @@ from .models import MAX_CALL_COST_USD, Decision, ToolCall, money
 
 POLICY_ERROR = -32001
 DUPLICATE_ID_ERROR = -32600
+INVALID_REQUEST_ERROR = -32600
 INVALID_PARAMS_ERROR = -32602
 INTERNAL_ERROR = -32603
 REQUEST_TIMEOUT_ERROR = -32002
 CHILD_UNAVAILABLE_ERROR = -32003
 PARSE_ERROR = -32700
+METHOD_NOT_FOUND_ERROR = -32601
+CALL_LIKE_METHOD = re.compile(
+    r"[ \t\r\n\f\v]*tools[ \t\r\n\f\v]*/+[ \t\r\n\f\v]*call[ \t\r\n\f\v]*",
+    re.IGNORECASE | re.ASCII,
+)
 DEFAULT_MAX_LINE_BYTES = 64 * 1024 * 1024
 
 
@@ -278,7 +285,26 @@ class McpStdioProxy:
             self._write_client(self._parse_error_response("invalid JSON-RPC message"))
             return
 
-        if message.get("method") != "tools/call":
+        method = message.get("method")
+        if not isinstance(method, str):
+            if "method" not in message and ("result" in message or "error" in message):
+                # A client response to a server-initiated request.
+                await self._passthrough_client_message(message, line)
+                return
+            # JSON-RPC requires a string method. A lenient wrapped server
+            # might still act on anything else, so it is never forwarded.
+            self._write_error(
+                message, INVALID_REQUEST_ERROR, "JSON-RPC method must be a string"
+            )
+            return
+        if method != "tools/call":
+            if CALL_LIKE_METHOD.fullmatch(method):
+                self._write_error(
+                    message,
+                    METHOD_NOT_FOUND_ERROR,
+                    "unsupported tools/call alias; use exact tools/call",
+                )
+                return
             await self._passthrough_client_message(message, line)
             return
 

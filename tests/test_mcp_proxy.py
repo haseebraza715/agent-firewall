@@ -73,6 +73,76 @@ class McpProxyTests(unittest.TestCase):
         self.assertEqual(process.returncode, 0, stderr)
         return [json.loads(line) for line in stdout.splitlines()]
 
+    def test_method_contract_with_child_receipts(self):
+        aliases = [
+            "TOOLS/CALL",
+            "Tools/Call",
+            " tools/call",
+            "tools/call ",
+            "tools / call",
+            "tools//call",
+            "\tTOOLS///CALL\n",
+        ]
+        passthrough = [
+            "initialize",
+            "tools/list",
+            "resources/read",
+            "prompts/get",
+            "vendor/tools/call",
+            "tools/callback",
+            "tools/call/extension",
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            receipts = Path(directory) / "receipts.jsonl"
+            child = (
+                "import json,sys\n"
+                "for line in sys.stdin:\n"
+                "    m=json.loads(line)\n"
+                f"    with open({str(receipts)!r}, 'a') as f:\n"
+                "        f.write(json.dumps(m)+'\\n')\n"
+                "    if 'id' in m:\n"
+                "        print(json.dumps({'jsonrpc':'2.0','id':m['id'],"
+                "'result':{'method':m['method'],'params':m.get('params')}}),"
+                "flush=True)\n"
+            )
+            methods = ["tools/call", *aliases, *passthrough]
+            messages = [
+                {
+                    "jsonrpc": "2.0",
+                    "id": i,
+                    "method": method,
+                    "params": {"name": "danger", "arguments": {"marker": i}},
+                }
+                for i, method in enumerate(methods)
+            ]
+            messages.extend(
+                {"jsonrpc": "2.0", "method": method, "params": {}}
+                for method in [*aliases, "notifications/initialized"]
+            )
+            responses = self.run_proxy(
+                {"default_decision": "block"},
+                messages,
+                child_command=[sys.executable, "-c", child],
+            )
+            by_id = {response["id"]: response for response in responses}
+            self.assertEqual(len(responses), len(methods))
+            self.assertEqual(by_id[0]["error"]["code"], -32001)
+            for i in range(1, 1 + len(aliases)):
+                self.assertEqual(by_id[i]["error"]["code"], -32601)
+            for i in range(1 + len(aliases), len(methods)):
+                self.assertEqual(
+                    by_id[i]["result"],
+                    {
+                        "method": methods[i],
+                        "params": messages[i]["params"],
+                    },
+                )
+            delivered = [json.loads(line) for line in receipts.read_text().splitlines()]
+            self.assertCountEqual(
+                [m["method"] for m in delivered],
+                [*passthrough, "notifications/initialized"],
+            )
+
     def test_non_tool_requests_pass_through(self):
         responses = self.run_proxy(
             {"default_decision": "block"},
