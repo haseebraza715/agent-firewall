@@ -27,6 +27,8 @@ class CliTests(unittest.TestCase):
                     str(POLICY),
                     "--tool",
                     "filesystem.read",
+                    "--arguments",
+                    '{"path": "/workspace/report.txt"}',
                 ]
             )
 
@@ -318,7 +320,7 @@ class PolicyCommandTests(unittest.TestCase):
         self.assertEqual(status, 3)
         self.assertIn("policy explain: email.send", rendered)
         self.assertIn("budget:", rendered)
-        self.assertIn("decision: require_approval (rule 2)", rendered)
+        self.assertIn("decision: require_approval (rule 1)", rendered)
 
     def test_explain_json_output(self):
         output = io.StringIO()
