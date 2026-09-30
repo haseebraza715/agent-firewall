@@ -188,16 +188,20 @@ def _handler(dashboard: Dashboard) -> type[BaseHTTPRequestHandler]:
                 return
             try:
                 body = json.loads(self.rfile.read(length))
+                if not isinstance(body, dict) or not isinstance(
+                    body.get("decision"), str
+                ):
+                    raise ValueError("decision must be approved or denied")
                 status = body["decision"]
                 record = dashboard.approvals.decide(
                     unquote(path[len(prefix) :]),
                     status,
                 )
-            except (json.JSONDecodeError, KeyError, ValueError, RecursionError):
-                self._json(400, {"error": "decision must be approved or denied"})
-                return
             except ApprovalNotFound:
                 self._json(404, {"error": "approval not found"})
+                return
+            except (json.JSONDecodeError, ValueError, RecursionError):
+                self._json(400, {"error": "decision must be approved or denied"})
                 return
             except ApprovalConflict as exc:
                 self._json(409, {"error": str(exc)})
