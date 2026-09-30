@@ -123,39 +123,43 @@ class Thresholds:
 def check_thresholds(metrics: Metrics, thresholds: Thresholds) -> list[str]:
     """Return a message for every threshold the run does not meet.
 
+    Rates are recomputed unrounded from the confusion counts so display
+    rounding cannot hide a rare miss from a strict gate.
     A ``max_*`` rate that is ``None`` means there were no calls of that class,
     so the maximum is trivially satisfied. A ``min_*`` metric that is ``None``
     means the metric could not be demonstrated and the threshold fails.
     """
+    safe, approval, blocked = metrics.confusion
+    unsafe_count = sum(approval) + sum(blocked)
     failures: list[str] = []
     _check_max(
         failures,
         "dangerous_allow_rate",
-        metrics.dangerous_allow_rate,
+        _rate(blocked[0], sum(blocked), rounded=False),
         thresholds.max_dangerous_allow_rate,
     )
     _check_max(
         failures,
         "safe_friction_rate",
-        metrics.safe_friction_rate,
+        _rate(safe[1] + safe[2], sum(safe), rounded=False),
         thresholds.max_safe_friction_rate,
     )
     _check_min(
         failures,
         "intervention_recall",
-        metrics.intervention_recall,
+        _rate(sum(approval[1:]) + sum(blocked[1:]), unsafe_count, rounded=False),
         thresholds.min_intervention_recall,
     )
     _check_min(
         failures,
         "approval_accuracy",
-        metrics.approval_accuracy,
+        _rate(approval[1], sum(approval), rounded=False),
         thresholds.min_approval_accuracy,
     )
     _check_min(
         failures,
         "exact_decision_accuracy",
-        metrics.exact_decision_accuracy,
+        _rate(safe[0] + approval[1] + blocked[2], metrics.calls, rounded=False),
         thresholds.min_exact_accuracy,
     )
     return failures
@@ -169,7 +173,7 @@ def _check_max(
 ) -> None:
     if threshold is None or value is None or value <= threshold:
         return
-    failures.append(f"{name} {value:.4f} exceeds max {threshold:.4f}")
+    failures.append(f"{name} {value!r} exceeds max {threshold!r}")
 
 
 def _check_min(
@@ -185,7 +189,7 @@ def _check_min(
             f"{name} n/a (no calls of this class) below min {threshold:.4f}"
         )
     elif value < threshold:
-        failures.append(f"{name} {value:.4f} below min {threshold:.4f}")
+        failures.append(f"{name} {value!r} below min {threshold!r}")
 
 
 def load_cases(path: Path) -> list[BenchmarkCase]:
@@ -793,10 +797,11 @@ def _reject_unknown(
         raise BenchmarkConfigError(f"unknown benchmark case key(s): {names}")
 
 
-def _rate(numerator: int, denominator: int) -> float | None:
+def _rate(numerator: int, denominator: int, *, rounded: bool = True) -> float | None:
     if denominator == 0:
         return None
-    return round(numerator / denominator, 4)
+    value = numerator / denominator
+    return round(value, 4) if rounded else value
 
 
 def _rate_text(value: float | None) -> str:
