@@ -18,3 +18,6 @@ assets/demo/demo.svg
 firewall.db-shm
 firewall.db-wal
 * 2.*
+
+# Local review drafts are not release inputs.
+.audit/
