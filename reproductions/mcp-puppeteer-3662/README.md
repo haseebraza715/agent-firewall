@@ -24,8 +24,7 @@ other systems, set `PUPPETEER_EXECUTABLE_PATH`.
 ```
 
 The first run installs the exact npm dependency graph from `package-lock.json`
-with Puppeteer's browser download disabled. The runner uses the browser already
-installed on the machine.
+with Puppeteer's browser download disabled. The runner passes the installed executable through `PUPPETEER_EXECUTABLE_PATH`, which Puppeteer's configuration reads. The pinned server does not read `PUPPETEER_LAUNCH_OPTIONS` and launches with `headless: false`, so a graphical session is required. This does not disable browser or machine security settings.
 
 Successful output has these facts:
 
@@ -39,8 +38,7 @@ Successful output has these facts:
 - `passed` is `true`.
 
 The runner removes stale evidence before starting and writes the normalized
-result to `evidence.json` only when the run passes. A failing run prints the
-results and exits nonzero without leaving an earlier passing artifact behind.
+result to `evidence.json` only when the run passes. A failing run prints the results, saves `failure.json` and exits nonzero without leaving an earlier passing artifact behind. Responses and child stderr are included for diagnosis. A JSON-RPC result with `isError: true` is a tool failure, not evidence of execution. Endpoint receipts must also pass.
 The evidence records SHA-256 hashes for `package-lock.json` and `policy.json`.
 The run uses only `127.0.0.1` and an ephemeral port. It does not contact a cloud
 metadata address, internal service, or external website.
