@@ -41,6 +41,14 @@ class McpChildUnavailableError(RuntimeError):
     """The wrapped MCP server exited or was terminated after a stalled write."""
 
 
+class McpToolResponseError(RuntimeError):
+    """A wrapped server reported a protocol or tool execution failure."""
+
+    def __init__(self, response: Mapping[str, Any]) -> None:
+        super().__init__("wrapped MCP server reported a tool failure")
+        self.response = response
+
+
 def _is_batch(line: bytes) -> bool:
     """Return True when the line parses as a JSON-RPC batch (a JSON array).
 
@@ -347,7 +355,13 @@ class McpStdioProxy:
             if "id" not in message:
                 await self._write_child_with_timeout(line)
                 return None
-            return await self._forward_request(message)
+            response = await self._forward_request(message)
+            result = response.get("result")
+            if "error" in response or (
+                isinstance(result, dict) and result.get("isError") is True
+            ):
+                raise McpToolResponseError(response)
+            return response
 
         try:
             response = await self.firewall.acall_with_arguments(
@@ -356,6 +370,9 @@ class McpStdioProxy:
                 forward,
                 estimated_cost_usd=estimated_cost_usd,
             )
+        except McpToolResponseError as exc:
+            self._write_client(exc.response)
+            return
         except FirewallError as exc:
             if isinstance(exc, ApprovalRequired):
                 if self.hold_hint and not self._hold_hint_shown:
