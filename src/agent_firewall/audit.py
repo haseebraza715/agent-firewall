@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock
@@ -52,8 +53,17 @@ class JsonlAuditLog:
         try:
             with self._lock:
                 self.path.parent.mkdir(parents=True, exist_ok=True)
-                with self.path.open("a", encoding="utf-8") as handle:
-                    handle.write(line + "\n")
+                with self.path.open("a+b") as handle:
+                    handle.seek(0, os.SEEK_END)
+                    if handle.tell():
+                        handle.seek(-1, os.SEEK_END)
+                        if handle.read(1) != b"\n":
+                            raise AuditWriteError(
+                                "audit log has an incomplete final record at "
+                                f"{self.path}; "
+                                "preserve it and configure a new audit path"
+                            )
+                    handle.write((line + "\n").encode("utf-8"))
         except OSError as exc:
             raise AuditWriteError(
                 f"could not append firewall audit record to {self.path}"
