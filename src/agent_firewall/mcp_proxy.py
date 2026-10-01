@@ -253,9 +253,11 @@ class McpStdioProxy:
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
         )
+        # Only the executable's basename: child arguments may carry tokens,
+        # and proxy stderr is routinely captured by supervisors and logs.
+        executable = os.path.basename(self.command[0]) if self.command else "?"
         print(
-            f"agent-firewall: spawned {' '.join(self.command)} "
-            f"(pid {self.process.pid})",
+            f"agent-firewall: spawned {executable} (pid {self.process.pid})",
             file=sys.stderr,
             flush=True,
         )

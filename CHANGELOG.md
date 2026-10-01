@@ -16,8 +16,9 @@
 - `mcp --approve-web` now requires `--audit` as well as `--state`, so the
   printed dashboard command always starts; the command also carries
   `--approval-timeout` whenever the proxy's hold window is not the default.
-- The MCP proxy logs lifecycle events on stderr: spawned child command and
-  pid, child exit code, and stalled-write aborts.
+- The MCP proxy logs lifecycle events on stderr: spawned child executable
+  name and pid (never the child's arguments, which may carry tokens), child
+  exit code, and stalled-write aborts.
 - The dashboard startup banner prints the effective approval token alongside
   the URL, and `dashboard --token` accepts a fixed token for scripted use.
 - `dashboard --approval-timeout` aligns the dashboard with the proxy's hold

@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -699,6 +700,8 @@ class McpProxyTests(unittest.TestCase):
                     "--",
                     sys.executable,
                     str(FAKE_SERVER),
+                    "--api-token",
+                    "sk-live-SECRET-token",
                 ],
                 cwd=ROOT,
                 env=env,
@@ -716,7 +719,15 @@ class McpProxyTests(unittest.TestCase):
             stdout, stderr = process.communicate(json.dumps(request) + "\n", timeout=5)
 
         self.assertEqual(process.returncode, 0, stderr)
-        self.assertIn("spawned", stderr)
+        spawned = [line for line in stderr.splitlines() if "spawned" in line]
+        self.assertEqual(len(spawned), 1)
+        self.assertRegex(
+            spawned[0],
+            rf"^agent-firewall: spawned {re.escape(Path(sys.executable).name)} "
+            r"\(pid \d+\)$",
+        )
+        self.assertNotIn("SECRET", stderr)
+        self.assertNotIn(str(FAKE_SERVER), stderr)
         self.assertIn("child exited rc=0", stderr)
 
     def test_held_without_approver_prints_restart_hint_on_stderr(self):
