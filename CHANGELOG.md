@@ -8,6 +8,9 @@
 - The MCP proxy explains held calls on stderr: with no approver configured it
   says to restart with `--approve-terminal` or `--approve-web`; with
   `--approve-web` it prints the exact dashboard start command at startup.
+- `mcp --approve-web` now requires `--audit` as well as `--state`, so the
+  printed dashboard command always starts; the command also carries
+  `--approval-timeout` whenever the proxy's hold window is not the default.
 - The MCP proxy logs lifecycle events on stderr: spawned child command and
   pid, child exit code, and stalled-write aborts.
 - The dashboard startup banner prints the effective approval token alongside

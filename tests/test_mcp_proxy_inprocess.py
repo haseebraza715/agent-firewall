@@ -10,11 +10,18 @@ import io
 import json
 import unittest
 from contextlib import redirect_stderr
+from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 from agent_firewall import Firewall, Policy
+from agent_firewall.cli import build_parser
 from agent_firewall.jsonrpc import encode_message, request_key
-from agent_firewall.mcp_proxy import McpStdioProxy, TerminalApprover
+from agent_firewall.mcp_proxy import (
+    McpStdioProxy,
+    TerminalApprover,
+    dashboard_command,
+    run_mcp_proxy,
+)
 from agent_firewall.models import Decision, DecisionKind, ToolCall
 
 
@@ -577,3 +584,37 @@ class LookalikeMethodTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DashboardCommandHintTests(unittest.TestCase):
+    def test_printed_command_parses_and_carries_the_timeout(self):
+        command = dashboard_command(
+            Path("policy.json"), Path("audit.jsonl"), Path("firewall.db"), 900
+        )
+        self.assertEqual(command[0], "agent-firewall")
+        args = build_parser().parse_args(command[1:])
+        self.assertEqual(args.command, "dashboard")
+        self.assertEqual(args.audit, Path("audit.jsonl"))
+        self.assertEqual(args.state, Path("firewall.db"))
+        self.assertEqual(args.approval_timeout, 900)
+
+    def test_default_timeout_is_omitted_and_fractions_survive(self):
+        default = dashboard_command(Path("p"), Path("a"), Path("s"))
+        self.assertNotIn("--approval-timeout", default)
+        self.assertEqual(build_parser().parse_args(default[1:]).approval_timeout, 300)
+        fractional = dashboard_command(Path("p"), Path("a"), Path("s"), 2.5)
+        self.assertEqual(
+            build_parser().parse_args(fractional[1:]).approval_timeout, 2.5
+        )
+
+    def test_web_approval_requires_an_audit_path(self):
+        with self.assertRaises(ValueError) as raised:
+            asyncio.run(
+                run_mcp_proxy(
+                    Path("policy.json"),
+                    ["true"],
+                    state_path=Path("firewall.db"),
+                    approve_web=True,
+                )
+            )
+        self.assertIn("--audit", str(raised.exception))

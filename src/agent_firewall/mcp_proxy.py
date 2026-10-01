@@ -5,6 +5,7 @@ import json
 import os
 import re
 import secrets
+import shlex
 import sys
 from collections.abc import Mapping, Sequence
 from decimal import Decimal
@@ -703,6 +704,38 @@ class McpStdioProxy:
             pass
 
 
+DEFAULT_APPROVAL_TIMEOUT = 300
+
+
+def dashboard_command(
+    policy_path: Path,
+    audit_path: Path,
+    state_path: Path,
+    approval_timeout: float = DEFAULT_APPROVAL_TIMEOUT,
+) -> list[str]:
+    """Build the dashboard command that pairs with a ``--approve-web`` proxy.
+
+    The dashboard requires ``--audit`` and ``--state``, and its
+    ``--approval-timeout`` must match the proxy's hold window or held calls
+    vanish from the pending list before the proxy gives up on them.
+    """
+    command = [
+        "agent-firewall",
+        "dashboard",
+        "--policy",
+        str(policy_path),
+        "--audit",
+        str(audit_path),
+        "--state",
+        str(state_path),
+    ]
+    if approval_timeout != DEFAULT_APPROVAL_TIMEOUT:
+        seconds = float(approval_timeout)
+        rendered = str(int(seconds)) if seconds.is_integer() else repr(seconds)
+        command.extend(["--approval-timeout", rendered])
+    return command
+
+
 async def run_mcp_proxy(
     policy_path: Path,
     command: Sequence[str],
@@ -716,19 +749,21 @@ async def run_mcp_proxy(
 ) -> int:
     if approve_terminal and approve_web:
         raise ValueError("choose either terminal or web approval")
-    if approve_web and state_path is None:
-        raise ValueError("--approve-web requires --state")
+    if approve_web and (state_path is None or audit_path is None):
+        raise ValueError("--approve-web requires --audit and --state")
     approver: Approver | None
     if approve_web:
-        assert state_path is not None
+        assert state_path is not None and audit_path is not None
         approver = SQLiteApprovalQueue(
             state_path,
             timeout_seconds=approval_timeout,
         )
+        command_text = shlex.join(
+            dashboard_command(policy_path, audit_path, state_path, approval_timeout)
+        )
         print(
             "agent-firewall: approvals come from the dashboard; start it with: "
-            f"agent-firewall dashboard --policy {policy_path} "
-            f"--state {state_path}" + (f" --audit {audit_path}" if audit_path else ""),
+            f"{command_text}",
             file=sys.stderr,
             flush=True,
         )

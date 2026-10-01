@@ -224,6 +224,8 @@ class CliTests(unittest.TestCase):
                         "mcp",
                         "--policy",
                         str(policy_path),
+                        "--audit",
+                        str(root / "audit.jsonl"),
                         "--state",
                         str(state_path),
                         "--approve-web",

@@ -72,10 +72,10 @@ agent-firewall mcp --policy examples/policy.json \
   -- node server.js
 ```
 
-Held (`require_approval`) calls wait for a decision in the local dashboard. The proxy prints the exact command to start it; the dashboard startup banner echoes its URL and approval token:
+Held (`require_approval`) calls wait for a decision in the local dashboard. `--approve-web` requires both `--audit` and `--state`, because the dashboard needs the same two paths. The proxy prints the exact command to start it, including `--approval-timeout` when it differs from the 300-second default; the dashboard startup banner echoes its URL and approval token:
 
 ```bash
-agent-firewall dashboard --policy examples/policy.json --state firewall.db
+agent-firewall dashboard --policy examples/policy.json --audit firewall-audit.jsonl --state firewall.db
 # Agent Firewall dashboard: http://127.0.0.1:8787
 # Agent Firewall dashboard token: ...
 ```

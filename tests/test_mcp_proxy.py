@@ -1,5 +1,6 @@
 import json
 import os
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -9,6 +10,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 from agent_firewall import Firewall, JsonlAuditLog, Policy, SQLiteApprovalQueue
+from agent_firewall.cli import build_parser
 from agent_firewall.jsonrpc import encode_message, request_key
 from agent_firewall.mcp_proxy import McpRequestTimeoutError, McpStdioProxy
 
@@ -775,6 +777,7 @@ class McpProxyTests(unittest.TestCase):
             root = Path(directory)
             policy_path = root / "policy.json"
             state_path = root / "firewall.db"
+            audit_path = root / "audit.jsonl"
             policy_path.write_text(
                 json.dumps(
                     {
@@ -799,6 +802,8 @@ class McpProxyTests(unittest.TestCase):
                     "mcp",
                     "--policy",
                     str(policy_path),
+                    "--audit",
+                    str(audit_path),
                     "--state",
                     str(state_path),
                     "--approve-web",
@@ -843,6 +848,14 @@ class McpProxyTests(unittest.TestCase):
         response = json.loads(stdout)
         self.assertEqual(response["id"], 9)
         self.assertIn("result", response)
+        hint = next(line for line in stderr.splitlines() if "start it with: " in line)
+        printed = shlex.split(hint.split("start it with: ", 1)[1])
+        self.assertEqual(printed[0], "agent-firewall")
+        dashboard_args = build_parser().parse_args(printed[1:])
+        self.assertEqual(dashboard_args.command, "dashboard")
+        self.assertEqual(dashboard_args.audit, audit_path)
+        self.assertEqual(dashboard_args.state, state_path)
+        self.assertEqual(dashboard_args.approval_timeout, 2)
 
     def test_request_timeout_fails_call_closed(self):
         child = (
