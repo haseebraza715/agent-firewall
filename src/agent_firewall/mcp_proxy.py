@@ -129,17 +129,34 @@ async def _read_child_line(
         line.extend(chunk)
 
 
-_ARGS_PREVIEW_LIMIT = 120
+_ARGS_VALUE_PREVIEW_LIMIT = 200
+
+
+def _value_preview(value: Any) -> str:
+    try:
+        text = json.dumps(value, ensure_ascii=False, default=repr)
+    except (TypeError, ValueError):
+        text = repr(value)
+    if len(text) > _ARGS_VALUE_PREVIEW_LIMIT:
+        cut = len(text) - _ARGS_VALUE_PREVIEW_LIMIT
+        text = text[:_ARGS_VALUE_PREVIEW_LIMIT] + f"... [{cut} more chars]"
+    return text
 
 
 def _args_preview(call: ToolCall) -> str:
-    try:
-        text = json.dumps(call.arguments, ensure_ascii=False, default=repr)
-    except (TypeError, ValueError):
-        text = repr(call.arguments)
-    if len(text) > _ARGS_PREVIEW_LIMIT:
-        text = text[: _ARGS_PREVIEW_LIMIT - 3] + "..."
-    return text
+    """Render every top-level argument on its own line.
+
+    Each value is truncated on its own, so one oversized argument (a long
+    email body, a big script) cannot push a short, decisive one (the
+    recipient, the command) out of the operator's view.
+    """
+    if not call.arguments:
+        return " {}"
+    lines = []
+    for key, value in call.arguments.items():
+        rendered_key = json.dumps(str(key), ensure_ascii=False)
+        lines.append(f"\n    {rendered_key}: {_value_preview(value)}")
+    return "".join(lines)
 
 
 class TerminalApprover:
@@ -174,7 +191,7 @@ class TerminalApprover:
         prompt = (
             f"agent-firewall approval\n"
             f"  tool: {call.name}\n"
-            f"  arguments: {_args_preview(call)}\n"
+            f"  arguments:{_args_preview(call)}\n"
             f"  reason: {decision.reason}\n"
             f"  Approve? [y/N] "
         )

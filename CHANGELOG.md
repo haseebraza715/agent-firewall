@@ -2,9 +2,11 @@
 
 ## Unreleased
 
-- Terminal approver now shows the tool, its bounded arguments, and the policy
+- Terminal approver now shows the tool, its arguments, and the policy
   reason; accepts `y`/`yes`; retries once after a non-answer; and states its
-  denial when input ends or arrives empty.
+  denial when input ends or arrives empty. Each top-level argument is on its
+  own line and truncated on its own (200 characters, with a marker saying how
+  much was cut), so a long body cannot hide a short recipient or command.
 - The MCP proxy explains held calls on stderr: with no approver configured it
   says to restart with `--approve-terminal` or `--approve-web`; with
   `--approve-web` it prints the exact dashboard start command at startup.

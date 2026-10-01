@@ -456,9 +456,9 @@ class TerminalApproverPromptTests(unittest.TestCase):
             return item
 
     def _ask(self, answers, arguments=None):
-        call = ToolCall.create(
-            name="email.send", arguments=arguments or {"to": "a@b.c"}
-        )
+        if arguments is None:
+            arguments = {"to": "a@b.c"}
+        call = ToolCall.create(name="email.send", arguments=arguments)
         decision = Decision(
             kind=DecisionKind.REQUIRE_APPROVAL,
             reason="outbound email needs sign-off",
@@ -497,10 +497,28 @@ class TerminalApproverPromptTests(unittest.TestCase):
         _, transcript = self._ask([], arguments=big_args)
         self.assertIn("email.send", transcript)
         self.assertIn("outbound email needs sign-off", transcript)
-        self.assertIn("...", transcript)
         arg_lines = [line for line in transcript.splitlines() if '"body"' in line]
         self.assertEqual(len(arg_lines), 1)
-        self.assertLessEqual(len(arg_lines[0]), 140)
+        self.assertIn("... [", arg_lines[0])
+        self.assertIn("more chars]", arg_lines[0])
+        self.assertLessEqual(len(arg_lines[0]), 260)
+
+    def test_long_body_before_recipient_cannot_hide_the_recipient(self):
+        arguments = {"body": "x" * 1000, "to": "victim@example.com"}
+        _, transcript = self._ask([], arguments=arguments)
+        prompt = transcript.split("Approve?", 1)[0]
+        lines = prompt.splitlines()
+        to_lines = [line for line in lines if line.startswith('    "to": ')]
+        self.assertEqual(len(to_lines), 1)
+        self.assertIn("victim@example.com", to_lines[0])
+        body_lines = [line for line in lines if line.startswith('    "body": ')]
+        self.assertEqual(len(body_lines), 1)
+        # 1000 x characters plus the two JSON quotes, minus the 200 shown.
+        self.assertIn("[802 more chars]", body_lines[0])
+
+    def test_empty_arguments_render_compactly(self):
+        _, transcript = self._ask([], arguments={})
+        self.assertIn("  arguments: {}", transcript)
 
     def test_missing_tty_prints_guidance_and_denies(self):
         err = io.StringIO()
