@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import inspect
 from collections.abc import Awaitable, Mapping
-from functools import wraps
+from functools import partial, wraps
 from pathlib import Path
 from typing import Any, Callable, Union
 
 from .audit import JsonlAuditLog
-from .exceptions import ApprovalRequired, ToolCallBlocked
+from .exceptions import ApprovalRequired, AuditWriteError, StorageError, ToolCallBlocked
 from .models import Decision, DecisionKind, ToolCall, Usage
 from .policy import Policy
 from .state import MemoryStateStore, SQLiteStateStore, StateStore
@@ -95,10 +95,15 @@ class Firewall:
 
         try:
             result = operation()
+            if inspect.isawaitable(result):
+                close = getattr(result, "close", None)
+                if close is not None:
+                    close()
+                raise TypeError("async operation requires Firewall.acall")
         except Exception as exc:
-            self._audit("failed", call, decision, type(exc).__name__)
+            self._audit_terminal("failed", call, decision, error=type(exc).__name__)
             raise
-        self._audit("executed", call, decision)
+        self._audit_terminal("executed", call, decision)
         return result
 
     async def acall(
@@ -140,9 +145,9 @@ class Firewall:
             if inspect.isawaitable(result):
                 result = await result
         except Exception as exc:
-            self._audit("failed", call, decision, type(exc).__name__)
+            self._audit_terminal("failed", call, decision, error=type(exc).__name__)
             raise
-        self._audit("executed", call, decision)
+        self._audit_terminal("executed", call, decision)
         return result
 
     def wrap(
@@ -253,6 +258,18 @@ class Firewall:
                 argument_mode=self.policy.audit_arguments,
             )
 
+    def _audit_terminal(
+        self,
+        event: str,
+        call: ToolCall,
+        decision: Decision,
+        error: str | None = None,
+    ) -> None:
+        try:
+            self._audit(event, call, decision, error=error)
+        except StorageError as exc:
+            raise AuditWriteError(str(exc), after_execution=True) from exc
+
 
 def _call_arguments(
     tool: Callable[..., Any],
@@ -261,26 +278,33 @@ def _call_arguments(
 ) -> Mapping[str, Any]:
     """Resolve a call's arguments to parameter names before policy evaluation.
 
-    Positional arguments are bound to their declared parameter names so that
-    argument-matching rules apply no matter how the caller invokes the tool.
+    Positional arguments and omitted defaults are bound to their declared
+    names so rules and evidence describe the arguments the tool will use.
     Tools with no inspectable signature keep the positional list under
     ``_args``, which never matches a named argument rule.
+    ``functools.partial`` wrappers, nested or not, are unwrapped first so
+    arguments they bind are evaluated like arguments passed at call time.
     """
+    while isinstance(tool, partial):
+        args = (*tool.args, *args)
+        kwargs = {**tool.keywords, **kwargs}
+        tool = tool.func
     arguments: dict[str, Any] = dict(kwargs)
-    if not args:
-        return arguments
     try:
         bound = inspect.signature(tool).bind_partial(*args, **kwargs)
     except (TypeError, ValueError):
-        arguments["_args"] = list(args)
+        if args:
+            arguments["_args"] = list(args)
         return arguments
 
+    bound.apply_defaults()
     parameters = bound.signature.parameters
     arguments.clear()
     for name, value in bound.arguments.items():
         kind = parameters[name].kind
         if kind is inspect.Parameter.VAR_POSITIONAL:
-            arguments["_args"] = list(value)
+            if value:
+                arguments["_args"] = list(value)
         elif kind is inspect.Parameter.VAR_KEYWORD:
             arguments.update(value)
         else:

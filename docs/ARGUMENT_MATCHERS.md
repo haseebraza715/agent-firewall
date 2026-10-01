@@ -71,12 +71,25 @@ symlink resolution, and never expand `~`.
 At least one field is required. `within` is boundary-aware: `/etc` contains
 `/etc/passwd` but not `/etc2/passwd`.
 
+A relative value is rooted at `/`, not at any working directory:
+`workspace/notes.txt` is evaluated as `/workspace/notes.txt` and so matches
+`within: /workspace`, while the tool may resolve it against its own working
+directory. Leading `..` components cannot climb above `/`. If a tool accepts
+relative paths, have it resolve them to absolute paths before the call, or
+add an earlier block rule for values not starting with `/`, for example the
+scalar glob `"path": "[!/]*"`.
+
 ## `domain`
 
 Matches an email address's domain (the part after the last `@`).
 `equals` matches exactly; `suffix` matches the domain itself or any of its
 subdomains. Both are case-insensitive and boundary-aware: `evil-example.com`
 is not a subdomain of `example.com`. A value without `@` never matches.
+The value must be a single bare mailbox such as `a@example.com`: a value
+containing `,`, `;`, `<`, `>` or any whitespace never matches, so recipient
+lists (`b@evil.com,a@example.com`) and display-name forms
+(`A <a@example.com>`) cannot satisfy a rule through their last address. Split
+recipient lists into separate arguments or calls if each needs checking.
 
 | field | value | meaning |
 |---|---|---|
@@ -118,8 +131,11 @@ Exactly one of `equals` or `in` is required.
 | `equals` | `str` | the leading operation must equal this |
 | `in` | `[str]` | the leading operation must be in this list |
 
-Only the first keyword is examined; the matcher does not parse the rest of the
-statement.
+Only the first keyword is examined, and a statement separator followed by
+anything (`SELECT 1; DELETE ...`) never matches: a second statement could
+hide behind a read-only first keyword. A single trailing semicolon is fine.
+A semicolon inside a quoted literal is also treated as a separator and fails
+closed.
 
 ## `command`
 
@@ -147,6 +163,16 @@ least one is required.
   }
 }
 ```
+
+Values that cannot be modeled as one argv vector never match: strings
+containing line breaks, and — in either form — tokens that are entirely shell
+operators (`;`, `|`, `&`, `<`, `>`, parentheses, backticks), contain command
+substitution (`$(...)`, `` `...` ``, `${...}`), or contain line breaks.
+Bare operators inside a longer argv-list element (for example
+`["sh", "-c", "ls; ls"]` or `["sed", "s/a;b/c/"]`) are treated as inert data,
+matching how an execv-style consumer sees them; if the guarded tool joins its
+argv back into a shell string, prefer a string-form rule or constrain on
+`executable` alone instead.
 
 ## Security notes
 

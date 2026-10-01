@@ -3,7 +3,9 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import secrets
+import shlex
 import sys
 from collections.abc import Mapping, Sequence
 from decimal import Decimal
@@ -11,17 +13,24 @@ from pathlib import Path
 from typing import Any
 
 from .approvals import SQLiteApprovalQueue
-from .exceptions import FirewallError
+from .exceptions import ApprovalRequired, AuditWriteError, FirewallError
 from .firewall import Approver, Firewall
 from .jsonrpc import decode_message, encode_message, request_key
-from .models import Decision, ToolCall, money
+from .models import MAX_CALL_COST_USD, Decision, ToolCall, money
 
 POLICY_ERROR = -32001
 DUPLICATE_ID_ERROR = -32600
+INVALID_REQUEST_ERROR = -32600
 INVALID_PARAMS_ERROR = -32602
+INTERNAL_ERROR = -32603
 REQUEST_TIMEOUT_ERROR = -32002
 CHILD_UNAVAILABLE_ERROR = -32003
 PARSE_ERROR = -32700
+METHOD_NOT_FOUND_ERROR = -32601
+CALL_LIKE_METHOD = re.compile(
+    r"[ \t\r\n\f\v]*tools[ \t\r\n\f\v]*/+[ \t\r\n\f\v]*call[ \t\r\n\f\v]*",
+    re.IGNORECASE | re.ASCII,
+)
 DEFAULT_MAX_LINE_BYTES = 64 * 1024 * 1024
 
 
@@ -31,6 +40,14 @@ class McpRequestTimeoutError(TimeoutError):
 
 class McpChildUnavailableError(RuntimeError):
     """The wrapped MCP server exited or was terminated after a stalled write."""
+
+
+class McpToolResponseError(RuntimeError):
+    """A wrapped server reported a protocol or tool execution failure."""
+
+    def __init__(self, response: Mapping[str, Any]) -> None:
+        super().__init__("wrapped MCP server reported a tool failure")
+        self.response = response
 
 
 def _is_batch(line: bytes) -> bool:
@@ -112,24 +129,88 @@ async def _read_child_line(
         line.extend(chunk)
 
 
-class TerminalApprover:
-    async def __call__(self, call: ToolCall, decision: Decision) -> bool:
-        return await asyncio.to_thread(self._prompt, call, decision)
+_ARGS_VALUE_PREVIEW_LIMIT = 200
 
-    @staticmethod
-    def _prompt(call: ToolCall, decision: Decision) -> bool:
+
+def _value_preview(value: Any) -> str:
+    try:
+        text = json.dumps(value, ensure_ascii=False, default=repr)
+    except (TypeError, ValueError):
+        text = repr(value)
+    if len(text) > _ARGS_VALUE_PREVIEW_LIMIT:
+        cut = len(text) - _ARGS_VALUE_PREVIEW_LIMIT
+        text = text[:_ARGS_VALUE_PREVIEW_LIMIT] + f"... [{cut} more chars]"
+    return text
+
+
+def _args_preview(call: ToolCall) -> str:
+    """Render every top-level argument on its own line.
+
+    Each value is truncated on its own, so one oversized argument (a long
+    email body, a big script) cannot push a short, decisive one (the
+    recipient, the command) out of the operator's view.
+    """
+    if not call.arguments:
+        return " {}"
+    lines = []
+    for key, value in call.arguments.items():
+        rendered_key = json.dumps(str(key), ensure_ascii=False)
+        lines.append(f"\n    {rendered_key}: {_value_preview(value)}")
+    return "".join(lines)
+
+
+class TerminalApprover:
+    """Interactive [y/N] approval on the controlling terminal.
+
+    The prompt shows the tool, its arguments, and the policy reason so a
+    human decides with the same data the policy saw. Anything other than
+    y/yes denies; garbage input gets one retry before denial.
+    """
+
+    async def __call__(self, call: ToolCall, decision: Decision) -> bool:
+        return await asyncio.to_thread(self._decide, call, decision)
+
+    def _decide(self, call: ToolCall, decision: Decision) -> bool:
         path = "CON" if os.name == "nt" else "/dev/tty"
         try:
             with open(path, "r+", encoding="utf-8") as terminal:
-                terminal.write(f"{call.name}: {decision.reason}. Approve? [y/N] ")
-                terminal.flush()
-                return terminal.readline().strip().lower() == "y"
+                return self._prompt(call, decision, terminal)
         except OSError:
             print(
                 "agent-firewall: no terminal available for approval",
                 file=sys.stderr,
             )
             return False
+
+    @staticmethod
+    def _prompt(
+        call: ToolCall,
+        decision: Decision,
+        terminal: Any,
+    ) -> bool:
+        prompt = (
+            f"agent-firewall approval\n"
+            f"  tool: {call.name}\n"
+            f"  arguments:{_args_preview(call)}\n"
+            f"  reason: {decision.reason}\n"
+            f"  Approve? [y/N] "
+        )
+        for _ in range(2):
+            terminal.write(prompt)
+            try:
+                answer = terminal.readline().strip().lower()
+            except EOFError:
+                print("agent-firewall: approval input ended; denied", file=sys.stderr)
+                return False
+            if answer in ("y", "yes"):
+                return True
+            if answer in ("n", "no"):
+                return False
+            if answer == "":
+                print("agent-firewall: approval input ended; denied", file=sys.stderr)
+                return False
+            prompt = "Answer y or n. Approve? [y/N] "
+        return False
 
 
 class McpStdioProxy:
@@ -139,6 +220,7 @@ class McpStdioProxy:
         command: Sequence[str],
         request_timeout: float = 300,
         max_line_bytes: int = DEFAULT_MAX_LINE_BYTES,
+        hold_hint: str | None = None,
     ) -> None:
         if command and command[0] == "--":
             command = command[1:]
@@ -152,12 +234,14 @@ class McpStdioProxy:
         self.command = list(command)
         self.request_timeout = request_timeout
         self.max_line_bytes = max_line_bytes
+        self.hold_hint = hold_hint
         self.process: asyncio.subprocess.Process | None = None
         self.pending: dict[str, asyncio.Future[Mapping[str, Any]]] = {}
         self._client_pending: set[str] = set()
         self._request_sequence = 0
         self._internal_id_prefix = f"agent-firewall:{secrets.token_hex(16)}:"
         self._child_failure: str | None = None
+        self._hold_hint_shown = False
         # Construct lazily inside the running loop. Python 3.9 binds asyncio
         # primitives at construction time, and callers may build the proxy
         # before entering asyncio.run().
@@ -168,6 +252,14 @@ class McpStdioProxy:
             *self.command,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
+        )
+        # Only the executable's basename: child arguments may carry tokens,
+        # and proxy stderr is routinely captured by supervisors and logs.
+        executable = os.path.basename(self.command[0]) if self.command else "?"
+        print(
+            f"agent-firewall: spawned {executable} (pid {self.process.pid})",
+            file=sys.stderr,
+            flush=True,
         )
         child_reader = asyncio.create_task(self._read_child())
         requests: list[asyncio.Task[None]] = []
@@ -193,13 +285,21 @@ class McpStdioProxy:
                 except (BrokenPipeError, ConnectionResetError):
                     pass
             await child_reader
-        return await self.process.wait()
+        returncode = await self.process.wait()
+        print(
+            f"agent-firewall: child exited rc={returncode}",
+            file=sys.stderr,
+            flush=True,
+        )
+        return returncode
 
     async def _handle_client_line(self, line: bytes) -> None:
         try:
             message = decode_message(line)
-        except ValueError:
-            self._write_client(self._parse_error_response("message too deeply nested"))
+        except ValueError as exc:
+            self._write_client(
+                self._parse_error_response(f"invalid JSON-RPC message: {exc}")
+            )
             return
         if message is None:
             if _is_batch(line):
@@ -213,7 +313,26 @@ class McpStdioProxy:
             self._write_client(self._parse_error_response("invalid JSON-RPC message"))
             return
 
-        if message.get("method") != "tools/call":
+        method = message.get("method")
+        if not isinstance(method, str):
+            if "method" not in message and ("result" in message or "error" in message):
+                # A client response to a server-initiated request.
+                await self._passthrough_client_message(message, line)
+                return
+            # JSON-RPC requires a string method. A lenient wrapped server
+            # might still act on anything else, so it is never forwarded.
+            self._write_error(
+                message, INVALID_REQUEST_ERROR, "JSON-RPC method must be a string"
+            )
+            return
+        if method != "tools/call":
+            if CALL_LIKE_METHOD.fullmatch(method):
+                self._write_error(
+                    message,
+                    METHOD_NOT_FOUND_ERROR,
+                    "unsupported tools/call alias; use exact tools/call",
+                )
+                return
             await self._passthrough_client_message(message, line)
             return
 
@@ -225,17 +344,23 @@ class McpStdioProxy:
         params = message.get("params")
         tool_name = params.get("name") if isinstance(params, dict) else None
         if not isinstance(tool_name, str) or not tool_name.strip():
-            self._reject(message, "tools/call requires a string tool name")
+            self._write_error(
+                message, INVALID_PARAMS_ERROR, "tools/call requires a string tool name"
+            )
             return
         assert isinstance(params, dict)
         arguments = params.get("arguments", {})
         if not isinstance(arguments, dict):
-            arguments = {}
+            self._write_error(
+                message, INVALID_PARAMS_ERROR, "tools/call arguments must be an object"
+            )
+            return
         try:
             estimated_cost_usd = _extract_cost(params.get("_meta"))
         except ValueError:
-            self._reject(
+            self._write_error(
                 message,
+                INVALID_PARAMS_ERROR,
                 "params._meta.estimated_cost_usd must be a non-negative finite number",
             )
             return
@@ -250,7 +375,13 @@ class McpStdioProxy:
             if "id" not in message:
                 await self._write_child_with_timeout(line)
                 return None
-            return await self._forward_request(message)
+            response = await self._forward_request(message)
+            result = response.get("result")
+            if "error" in response or (
+                isinstance(result, dict) and result.get("isError") is True
+            ):
+                raise McpToolResponseError(response)
+            return response
 
         try:
             response = await self.firewall.acall_with_arguments(
@@ -259,7 +390,21 @@ class McpStdioProxy:
                 forward,
                 estimated_cost_usd=estimated_cost_usd,
             )
+        except McpToolResponseError as exc:
+            self._write_client(exc.response)
+            return
         except FirewallError as exc:
+            if isinstance(exc, ApprovalRequired):
+                if self.hold_hint and not self._hold_hint_shown:
+                    print(
+                        f"agent-firewall: {self.hold_hint}",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                    self._hold_hint_shown = True
+                text = "tool call requires approval but no approver is configured"
+            else:
+                text = "Tool call blocked by Agent Firewall"
             if "id" in message:
                 self._write_client(
                     {
@@ -267,7 +412,7 @@ class McpStdioProxy:
                         "id": message["id"],
                         "error": {
                             "code": POLICY_ERROR,
-                            "message": "Tool call blocked by Agent Firewall",
+                            "message": text,
                             "data": exc.decision.as_dict(),
                         },
                     }
@@ -281,8 +426,19 @@ class McpStdioProxy:
             if "id" in message:
                 self._write_client(self._child_unavailable_response(message["id"]))
             return
+        except AuditWriteError as exc:
+            self._write_error(
+                message,
+                INTERNAL_ERROR,
+                ("tool ran or was attempted but its audit record could not be written")
+                if exc.after_execution
+                else "internal firewall error; call not executed",
+            )
+            return
         except Exception:
-            self._reject(message, "internal firewall error; call not executed")
+            self._write_error(
+                message, INTERNAL_ERROR, "internal firewall error; call not executed"
+            )
             return
         finally:
             if client_key is not None:
@@ -291,14 +447,19 @@ class McpStdioProxy:
         if response is not None:
             self._write_client(response)
 
-    def _reject(self, message: Mapping[str, Any], text: str) -> None:
+    def _write_error(
+        self,
+        message: Mapping[str, Any],
+        code: int,
+        text: str,
+    ) -> None:
         if "id" not in message:
             return
         self._write_client(
             {
                 "jsonrpc": "2.0",
                 "id": message["id"],
-                "error": {"code": INVALID_PARAMS_ERROR, "message": text},
+                "error": {"code": code, "message": text},
             }
         )
 
@@ -507,6 +668,11 @@ class McpStdioProxy:
         self._child_failure = (
             "wrapped MCP server terminated after a stalled stdin write"
         )
+        print(
+            "agent-firewall: aborted wrapped MCP server after stalled write",
+            file=sys.stderr,
+            flush=True,
+        )
         if self.process is None:
             return
         child_stdin = self.process.stdin
@@ -557,6 +723,38 @@ class McpStdioProxy:
             pass
 
 
+DEFAULT_APPROVAL_TIMEOUT = 300
+
+
+def dashboard_command(
+    policy_path: Path,
+    audit_path: Path,
+    state_path: Path,
+    approval_timeout: float = DEFAULT_APPROVAL_TIMEOUT,
+) -> list[str]:
+    """Build the dashboard command that pairs with a ``--approve-web`` proxy.
+
+    The dashboard requires ``--audit`` and ``--state``, and its
+    ``--approval-timeout`` must match the proxy's hold window or held calls
+    vanish from the pending list before the proxy gives up on them.
+    """
+    command = [
+        "agent-firewall",
+        "dashboard",
+        "--policy",
+        str(policy_path),
+        "--audit",
+        str(audit_path),
+        "--state",
+        str(state_path),
+    ]
+    if approval_timeout != DEFAULT_APPROVAL_TIMEOUT:
+        seconds = float(approval_timeout)
+        rendered = str(int(seconds)) if seconds.is_integer() else repr(seconds)
+        command.extend(["--approval-timeout", rendered])
+    return command
+
+
 async def run_mcp_proxy(
     policy_path: Path,
     command: Sequence[str],
@@ -570,19 +768,34 @@ async def run_mcp_proxy(
 ) -> int:
     if approve_terminal and approve_web:
         raise ValueError("choose either terminal or web approval")
-    if approve_web and state_path is None:
-        raise ValueError("--approve-web requires --state")
+    if approve_web and (state_path is None or audit_path is None):
+        raise ValueError("--approve-web requires --audit and --state")
     approver: Approver | None
     if approve_web:
-        assert state_path is not None
+        assert state_path is not None and audit_path is not None
         approver = SQLiteApprovalQueue(
             state_path,
             timeout_seconds=approval_timeout,
         )
+        command_text = shlex.join(
+            dashboard_command(policy_path, audit_path, state_path, approval_timeout)
+        )
+        print(
+            "agent-firewall: approvals come from the dashboard; start it with: "
+            f"{command_text}",
+            file=sys.stderr,
+            flush=True,
+        )
+        hold_hint = None
     elif approve_terminal:
         approver = TerminalApprover()
+        hold_hint = None
     else:
         approver = None
+        hold_hint = (
+            "call held but no approver is configured; restart with "
+            "--approve-terminal or --approve-web"
+        )
     firewall = Firewall.from_policy_file(
         policy_path,
         approver=approver,
@@ -594,6 +807,7 @@ async def run_mcp_proxy(
         command,
         request_timeout=request_timeout,
         max_line_bytes=max_line_bytes,
+        hold_hint=hold_hint,
     ).run()
 
 
@@ -602,10 +816,10 @@ def _extract_cost(meta: Any) -> Decimal:
 
     An absent ``_meta``, a non-dict ``_meta``, or a ``_meta`` without an
     ``estimated_cost_usd`` key all mean zero cost. A present value must be a
-    non-negative finite decimal; anything else raises ``ValueError`` so the
-    caller can reject the call fail-closed instead of executing it with an
-    ambiguous cost.
+    non-negative finite decimal within the supported per-call range; anything
+    else raises ``ValueError`` so the caller can reject the call fail-closed
+    instead of executing it with an ambiguous cost.
     """
     if not isinstance(meta, dict) or "estimated_cost_usd" not in meta:
         return Decimal("0")
-    return money(meta["estimated_cost_usd"])
+    return money(meta["estimated_cost_usd"], max_value=MAX_CALL_COST_USD)

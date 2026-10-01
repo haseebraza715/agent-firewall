@@ -23,4 +23,18 @@ class StorageError(RuntimeError):
 
 
 class AuditWriteError(StorageError):
-    """The append-only audit record could not be persisted (fail closed)."""
+    """The append-only audit record could not be persisted (fail closed).
+
+    ``after_execution`` is True when the write failed for a terminal event,
+    meaning the call was already attempted: the tool either ran or its
+    outcome is unknown. False means execution never started.
+    """
+
+    def __init__(
+        self,
+        message: str = "audit record could not be written",
+        *,
+        after_execution: bool = False,
+    ) -> None:
+        super().__init__(message)
+        self.after_execution = after_execution

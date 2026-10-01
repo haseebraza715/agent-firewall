@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from ._version import __version__
+from .lint import lint_policy
 from .models import DecisionKind, ToolCall, Usage
 from .policy import Policy
 
@@ -56,6 +57,22 @@ def run_checks(
         return checks
 
     checks.append(DoctorCheck("policy", True, f"loaded {policy_path}"))
+
+    findings = lint_policy(policy)
+    errors = [finding for finding in findings if finding.severity == "error"]
+    warnings = [finding for finding in findings if finding.severity == "warning"]
+    if errors:
+        message = "policy lint errors: " + ", ".join(
+            sorted(finding.code for finding in errors)
+        )
+        checks.append(DoctorCheck("policy_lint", False, message))
+    elif warnings:
+        message = "policy lint warnings: " + ", ".join(
+            sorted(finding.code for finding in warnings)
+        )
+        checks.append(DoctorCheck("policy_lint", True, message))
+    else:
+        checks.append(DoctorCheck("policy_lint", True, "no lint findings"))
 
     for name, path in (("state", state_path), ("audit", audit_path)):
         checks.append(

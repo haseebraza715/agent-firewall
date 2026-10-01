@@ -2,6 +2,45 @@
 
 ## Unreleased
 
+- Terminal approver now shows the tool, its arguments, and the policy
+  reason; accepts `y`/`yes`; retries once after a non-answer; and states its
+  denial when input ends or arrives empty. Each top-level argument is on its
+  own line and truncated on its own (200 characters, with a marker saying how
+  much was cut), so a long body cannot hide a short recipient or command.
+- The MCP proxy explains held calls on stderr: with no approver configured it
+  says to restart with `--approve-terminal` or `--approve-web`; with
+  `--approve-web` it prints the exact dashboard start command at startup.
+- `deny_private_networks` no longer raises on numeric hosts with thousands
+  of digits (the interpreter's integer-string digit limit); spellings too
+  long for any address encoding are denied instead.
+- `mcp --approve-web` now requires `--audit` as well as `--state`, so the
+  printed dashboard command always starts; the command also carries
+  `--approval-timeout` whenever the proxy's hold window is not the default.
+- The MCP proxy logs lifecycle events on stderr: spawned child executable
+  name and pid (never the child's arguments, which may carry tokens), child
+  exit code, and stalled-write aborts.
+- The dashboard startup banner prints the effective approval token alongside
+  the URL, and `dashboard --token` accepts a fixed token for scripted use.
+- `dashboard --approval-timeout` aligns the dashboard with the proxy's hold
+  window (default 300 seconds).
+- Dashboard decisions surface failures instead of swallowing them: non-2xx
+  approve/deny responses (for example after a dashboard restart minted a new
+  token) appear in a `role="alert"` status region; keyboard focus stays on
+  the same Approve/Deny button across the 1.5 s refresh; button text meets
+  contrast guidelines; and the refresh timestamp no longer spams screen
+  readers through a live region.
+- Pending-approval listings hide rows older than the approval timeout and say
+  how many are hidden, so approvals orphaned by a dead proxy do not silently
+  accumulate in the operator's view.
+- New live demo: `scripts/demo/attack_demo.py` runs a deliberately vulnerable
+  MCP server behind the real proxy and walks six scenarios in under a second,
+  including an octal-SSRF block, duplicate-key smuggling, stacked SQL, and a
+  held call approved end-to-end through the dashboard API.
+
+## 0.3.1 - 2026-08-22
+
+## 0.3.1 - 2026-08-22
+
 - Harden `deny_private_networks`: legacy IPv4 encodings (`127.1`,
   `2130706433`, `0x7f000001`, leading zeros) and IPv6 zone ids are now
   classified as the literal addresses they resolve to, closing an SSRF-style
@@ -17,7 +56,7 @@
 - Add `--max-line-bytes` to the `mcp` command (default 64 MiB); oversized
   client or child lines are rejected or dropped without losing framing.
 - Never forward undecodable or non-object client lines to the wrapped MCP
-  server: they are rejected with a JSON-RPC parse error instead of risking
+  server: they are answered with a JSON-RPC parse error instead of risking
   execution by a lenient server outside the policy.
 - Reject batch requests whose elements would smuggle a `tools/call` past the
   per-line policy check; keep the per-element `-32600` rejection for batches
@@ -29,6 +68,60 @@
 - Corrupted SQLite state rows now raise `StorageError` instead of leaking
   `TypeError`/`InvalidOperation`; `doctor` reports an explicitly empty MCP
   command as a failed check.
+- Harden the `sql` matcher against stacked statements: a statement separator
+  followed by anything (`SELECT 1; DELETE ...`) never matches a read-only
+  rule, closing the second-statement hole behind an allowed first keyword. A
+  single trailing semicolon still matches; semicolons inside quoted literals
+  also fail closed.
+- Harden the `command` matcher against multi-statement spellings: string
+  values containing line breaks never match, argv-list elements must satisfy
+  the same shell-control rule as lexed string tokens, and backtick command
+  substitution (`\`cmd\``) never matches in either form. Bare operators inside
+  a longer list element stay inert data, matching execv semantics.
+- Classify lone-integer URL hosts by value with explicit hex and octal bases
+  instead of a length heuristic: `http://017700000001/` is now classified as
+  `127.0.0.1` and denied by `deny_private_networks`. Integers beyond 32 bits
+  classify by their modulo-2^32 wraparound, and dotted quads whose parts carry
+  redundant leading zeros are classified under both the octal and decimal
+  readings, matching the divergent behavior of real resolvers.
+- Treat duplicate JSON keys anywhere in a JSON-RPC message as malformed input:
+  client lines are answered with a parse error, and child-originated frames
+  carrying duplicate keys are dropped rather than relayed, so neither side can
+  act on a different view of a message than the one the proxy decoded. A
+  request whose response was dropped fails closed at its timeout.
+- Reject `tools/call` requests whose `arguments` are null or not an object
+  with `-32602`, instead of evaluating them as `{}` while forwarding the
+  original parameters.
+- Report internal firewall errors truthfully over MCP: an audit-write failure
+  on a terminal event answers `-32603` saying the tool ran or was attempted
+  but its audit record could not be written; pre-execution failures and
+  unexpected errors also use `-32603` and never claim a call "was not
+  executed" unless it was.
+- Give held calls without any approver their own signal: same `-32001` code,
+  but the message names the missing approver so misconfiguration is not
+  mistaken for a policy denial.
+- Reject tool names containing line breaks at `ToolCall.create` so agent
+  output cannot forge lines in text formatting.
+- Raise `TypeError` from the synchronous `Firewall.call`/`wrap` path when a
+  tool returns an awaitable, closing the coroutine instead of leaking an
+  un-awaited call that would execute outside the firewall.
+- Enforce finite positive timeouts in `SQLiteApprovalQueue` directly, not only
+  through CLI flags.
+- Cap per-call cost inputs at `$1e12`: astronomically large client-supplied
+  `estimated_cost_usd` values are rejected at the boundary instead of
+  overflowing budget accumulation later. Policy budget limits remain
+  unrestricted trusted configuration.
+- Validate numeric CLI flags: `--approval-timeout` and `--request-timeout`
+  reject NaN/infinite/non-positive values, and `dashboard --port` must be
+  0-65535, all failing at argument parsing instead of misbehaving at runtime.
+- Make `replay` validate scenario input types (`arguments` object, string
+  `title`/`source_url`) so malformed scenario files exit `2` with a terse
+  error instead of a traceback.
+- Run the policy linter inside `doctor`: error-severity lint findings now fail
+  the `policy_lint` check.
+- Add `pytest` to the `dev` extra so the documented
+  `pip install -e .[dev] && python -m pytest tests` workflow works from a
+  clean checkout.
 
 ## 0.3.0 - 2026-08-08
 

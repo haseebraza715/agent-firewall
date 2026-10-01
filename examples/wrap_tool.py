@@ -1,7 +1,7 @@
 """Guard a real Python function with Agent Firewall.
 
-The policy in this directory pre-approves company recipients and gates
-everything else on a human decision. A denial is a normal outcome, not a
+The policy in this directory requires approval for every email send and uses
+a local print stub as the email tool. A denial is a normal outcome, not a
 crash, so `ToolCallBlocked` is caught and reported.
 """
 

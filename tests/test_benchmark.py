@@ -580,11 +580,11 @@ class BenchmarkHashTests(unittest.TestCase):
 class ThresholdTests(unittest.TestCase):
     def _metrics(self):
         return Metrics(
-            calls=1,
-            exact_decision_accuracy=0.5,
-            expected_counts={"allow": 1, "require_approval": 0, "block": 0},
-            predicted_counts={"allow": 1, "require_approval": 0, "block": 0},
-            confusion=((1, 0, 0), (0, 0, 0), (0, 0, 0)),
+            calls=4,
+            exact_decision_accuracy=0.75,
+            expected_counts={"allow": 4, "require_approval": 0, "block": 0},
+            predicted_counts={"allow": 3, "require_approval": 0, "block": 1},
+            confusion=((3, 0, 1), (0, 0, 0), (0, 0, 0)),
             intervention_recall=None,
             dangerous_allow_rate=None,
             safe_friction_rate=0.25,

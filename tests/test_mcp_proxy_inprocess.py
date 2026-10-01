@@ -6,13 +6,23 @@ covered when coverage is measured in the test process.
 """
 
 import asyncio
+import io
 import json
 import unittest
-from unittest.mock import patch
+from contextlib import redirect_stderr
+from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
 from agent_firewall import Firewall, Policy
+from agent_firewall.cli import build_parser
 from agent_firewall.jsonrpc import encode_message, request_key
-from agent_firewall.mcp_proxy import McpStdioProxy
+from agent_firewall.mcp_proxy import (
+    McpStdioProxy,
+    TerminalApprover,
+    dashboard_command,
+    run_mcp_proxy,
+)
+from agent_firewall.models import Decision, DecisionKind, ToolCall
 
 
 def _proxy(policy_dict, **kwargs):
@@ -109,6 +119,24 @@ class InProcessProxyTests(unittest.TestCase):
         )
         self.assertEqual(written["error"]["code"], -32602)
 
+    def test_over_cap_cost_is_rejected_as_params_error(self):
+        proxy = _proxy({"default_decision": "allow"})
+        written = _call(
+            proxy,
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {
+                    "name": "demo.tool",
+                    "arguments": {},
+                    "_meta": {"estimated_cost_usd": "1e300"},
+                },
+            },
+        )
+        self.assertEqual(written["error"]["code"], -32602)
+        self.assertIn("estimated_cost_usd", written["error"]["message"])
+
     def test_negative_cost_rejects_call(self):
         proxy = _proxy({"default_decision": "allow"})
         written = _call(
@@ -162,6 +190,22 @@ class InProcessProxyTests(unittest.TestCase):
         with patch.object(proxy, "_write_client", side_effect=record):
             asyncio.run(proxy._handle_client_line(deep))
         self.assertEqual(written["value"]["error"]["code"], -32700)
+
+    def test_duplicate_key_line_names_the_reason(self):
+        proxy = _proxy({"default_decision": "allow"})
+        written = {}
+
+        def record(value):
+            written["value"] = value
+
+        line = (
+            b'{"jsonrpc":"2.0","id":6,"method":"tools/call",'
+            b'"params":{"name":"t","a":1,"a":2}}\n'
+        )
+        with patch.object(proxy, "_write_client", side_effect=record):
+            asyncio.run(proxy._handle_client_line(line))
+        self.assertEqual(written["value"]["error"]["code"], -32700)
+        self.assertIn("duplicate key", written["value"]["error"]["message"])
 
     def test_blank_line_is_ignored(self):
         proxy = _proxy({"default_decision": "allow"})
@@ -287,5 +331,308 @@ class InProcessProxyTests(unittest.TestCase):
             McpStdioProxy(_proxy({}), ["echo"], max_line_bytes=0)
 
 
+class TruthfulProxyErrorTests(unittest.TestCase):
+    def test_non_object_arguments_are_rejected_not_forwarded(self):
+        proxy = _proxy({"default_decision": "allow"})
+        written = _call(
+            proxy,
+            {
+                "jsonrpc": "2.0",
+                "id": 7,
+                "method": "tools/call",
+                "params": {"name": "demo.tool", "arguments": ["raw"]},
+            },
+        )
+        self.assertEqual(written["error"]["code"], -32602)
+        self.assertIn("arguments", written["error"]["message"])
+
+    def test_null_arguments_are_rejected_not_evaluated_empty(self):
+        proxy = _proxy({"default_decision": "allow"})
+        written = _call(
+            proxy,
+            {
+                "jsonrpc": "2.0",
+                "id": 8,
+                "method": "tools/call",
+                "params": {"name": "demo.tool", "arguments": None},
+            },
+        )
+        self.assertEqual(written["error"]["code"], -32602)
+
+    def test_held_call_without_approver_reports_hold_not_block(self):
+        proxy = _proxy(
+            {
+                "default_decision": "block",
+                "rules": [{"tool": "email.send", "decision": "require_approval"}],
+            }
+        )
+        written = _call(
+            proxy,
+            {
+                "jsonrpc": "2.0",
+                "id": 9,
+                "method": "tools/call",
+                "params": {"name": "email.send", "arguments": {}},
+            },
+        )
+        self.assertEqual(written["error"]["code"], -32001)
+        self.assertIn("approval", written["error"]["message"].lower())
+        self.assertEqual(written["error"]["data"]["decision"], "require_approval")
+
+    def test_policy_block_still_reports_blocked(self):
+        proxy = _proxy({"default_decision": "block"})
+        written = _call(
+            proxy,
+            {
+                "jsonrpc": "2.0",
+                "id": 10,
+                "method": "tools/call",
+                "params": {"name": "evil.tool", "arguments": {}},
+            },
+        )
+        self.assertEqual(written["error"]["code"], -32001)
+        self.assertIn("blocked", written["error"]["message"].lower())
+
+    def test_post_execution_audit_failure_never_claims_not_executed(self):
+        from agent_firewall.exceptions import AuditWriteError
+
+        proxy = _proxy({"default_decision": "allow"})
+        proxy.firewall = AsyncMock(spec=proxy.firewall)
+        proxy.firewall.acall_with_arguments.side_effect = AuditWriteError(
+            "audit disk full", after_execution=True
+        )
+        written = _call(
+            proxy,
+            {
+                "jsonrpc": "2.0",
+                "id": 11,
+                "method": "tools/call",
+                "params": {"name": "demo.tool", "arguments": {}},
+            },
+        )
+        self.assertEqual(written["error"]["code"], -32603)
+        self.assertIn("ran or was attempted", written["error"]["message"])
+        self.assertNotIn("call not executed", written["error"]["message"])
+
+    def test_pre_execution_audit_failure_says_not_executed(self):
+        from agent_firewall.exceptions import AuditWriteError
+
+        proxy = _proxy({"default_decision": "allow"})
+        proxy.firewall = AsyncMock(spec=proxy.firewall)
+        proxy.firewall.acall_with_arguments.side_effect = AuditWriteError(
+            "audit disk full"
+        )
+        written = _call(
+            proxy,
+            {
+                "jsonrpc": "2.0",
+                "id": 12,
+                "method": "tools/call",
+                "params": {"name": "demo.tool", "arguments": {}},
+            },
+        )
+        self.assertEqual(written["error"]["code"], -32603)
+        self.assertIn("not executed", written["error"]["message"])
+
+
+class TerminalApproverPromptTests(unittest.TestCase):
+    class FakeTerminal:
+        def __init__(self, answers):
+            self.answers = list(answers)
+            self.written = []
+
+        def write(self, text):
+            self.written.append(text)
+
+        def flush(self):
+            pass
+
+        def readline(self):
+            if not self.answers:
+                raise EOFError
+            item = self.answers.pop(0)
+            if isinstance(item, Exception):
+                raise item
+            return item
+
+    def _ask(self, answers, arguments=None):
+        if arguments is None:
+            arguments = {"to": "a@b.c"}
+        call = ToolCall.create(name="email.send", arguments=arguments)
+        decision = Decision(
+            kind=DecisionKind.REQUIRE_APPROVAL,
+            reason="outbound email needs sign-off",
+            code="rule",
+        )
+        terminal = self.FakeTerminal(answers)
+        approved = TerminalApprover._prompt(call, decision, terminal)
+        return approved, "\n".join(terminal.written)
+
+    def test_y_and_yes_approve(self):
+        for answer in ("y", "yes", "  YES \n"):
+            with self.subTest(answer=answer):
+                approved, transcript = self._ask([answer])
+                self.assertTrue(approved)
+
+    def test_empty_no_and_n_denies(self):
+        for answer in ("", "n", "no\n"):
+            with self.subTest(answer=answer):
+                approved, _ = self._ask([answer])
+                self.assertFalse(approved)
+
+    def test_garbage_reprompts_once_then_denies(self):
+        approved, transcript = self._ask(["maybe?", "nope"])
+        self.assertFalse(approved)
+        self.assertEqual(transcript.count("Answer y or n"), 1)
+
+    def test_eof_denies_with_message(self):
+        err = io.StringIO()
+        with redirect_stderr(err):
+            approved, _ = self._ask([EOFError()])
+        self.assertFalse(approved)
+        self.assertIn("denied", err.getvalue())
+
+    def test_prompt_shows_arguments_and_truncates_long_ones(self):
+        big_args = {"body": "x" * 400}
+        _, transcript = self._ask([], arguments=big_args)
+        self.assertIn("email.send", transcript)
+        self.assertIn("outbound email needs sign-off", transcript)
+        arg_lines = [line for line in transcript.splitlines() if '"body"' in line]
+        self.assertEqual(len(arg_lines), 1)
+        self.assertIn("... [", arg_lines[0])
+        self.assertIn("more chars]", arg_lines[0])
+        self.assertLessEqual(len(arg_lines[0]), 260)
+
+    def test_long_body_before_recipient_cannot_hide_the_recipient(self):
+        arguments = {"body": "x" * 1000, "to": "victim@example.com"}
+        _, transcript = self._ask([], arguments=arguments)
+        prompt = transcript.split("Approve?", 1)[0]
+        lines = prompt.splitlines()
+        to_lines = [line for line in lines if line.startswith('    "to": ')]
+        self.assertEqual(len(to_lines), 1)
+        self.assertIn("victim@example.com", to_lines[0])
+        body_lines = [line for line in lines if line.startswith('    "body": ')]
+        self.assertEqual(len(body_lines), 1)
+        # 1000 x characters plus the two JSON quotes, minus the 200 shown.
+        self.assertIn("[802 more chars]", body_lines[0])
+
+    def test_empty_arguments_render_compactly(self):
+        _, transcript = self._ask([], arguments={})
+        self.assertIn("  arguments: {}", transcript)
+
+    def test_missing_tty_prints_guidance_and_denies(self):
+        err = io.StringIO()
+        approver = TerminalApprover()
+        call = ToolCall.create(name="email.send")
+        decision = Decision(kind=DecisionKind.REQUIRE_APPROVAL, reason="r", code="rule")
+        with patch("agent_firewall.mcp_proxy.open", side_effect=OSError):
+            with redirect_stderr(err):
+                approved = asyncio.run(approver(call, decision))
+        self.assertFalse(approved)
+        self.assertIn("no terminal available", err.getvalue())
+
+
+class HoldHintTests(unittest.TestCase):
+    HELD_POLICY = {
+        "default_decision": "block",
+        "rules": [{"tool": "email.send", "decision": "require_approval"}],
+    }
+
+    def _held(self, proxy):
+        return _call(
+            proxy,
+            {
+                "jsonrpc": "2.0",
+                "id": 21,
+                "method": "tools/call",
+                "params": {"name": "email.send", "arguments": {}},
+            },
+        )
+
+    def test_hold_hint_printed_once_to_stderr(self):
+        proxy = _proxy(self.HELD_POLICY, hold_hint="HINT-ME")
+        err = io.StringIO()
+        with redirect_stderr(err):
+            self._held(proxy)
+            self._held(proxy)
+        output = err.getvalue()
+        self.assertIn("HINT-ME", output)
+        self.assertEqual(output.count("HINT-ME"), 1)
+
+    def test_no_hint_without_configuration(self):
+        proxy = _proxy(self.HELD_POLICY)
+        err = io.StringIO()
+        with redirect_stderr(err):
+            self._held(proxy)
+        self.assertEqual(err.getvalue(), "")
+
+
+class LookalikeMethodTests(unittest.TestCase):
+    BLOCKED_POLICY = {"default_decision": "block"}
+
+    def _send(self, method):
+        proxy = _proxy(self.BLOCKED_POLICY)
+        return _call(
+            proxy,
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": method,
+                "params": {"name": "danger", "arguments": {}},
+            },
+        )
+
+    def test_lookalike_methods_are_rejected_not_forwarded(self):
+        for method in (
+            "TOOLS/CALL",
+            "Tools/Call",
+            " tools/call",
+            "tools/call ",
+            "tools / call",
+            "tools//call",
+        ):
+            with self.subTest(method=method):
+                written = self._send(method)
+                self.assertIsNotNone(written, f"{method!r} was forwarded")
+                self.assertEqual(written["error"]["code"], -32601)
+
+    def test_exact_method_still_policed(self):
+        self.assertEqual(self._send("tools/call")["error"]["code"], -32001)
+
+
 if __name__ == "__main__":
     unittest.main()
+
+
+class DashboardCommandHintTests(unittest.TestCase):
+    def test_printed_command_parses_and_carries_the_timeout(self):
+        command = dashboard_command(
+            Path("policy.json"), Path("audit.jsonl"), Path("firewall.db"), 900
+        )
+        self.assertEqual(command[0], "agent-firewall")
+        args = build_parser().parse_args(command[1:])
+        self.assertEqual(args.command, "dashboard")
+        self.assertEqual(args.audit, Path("audit.jsonl"))
+        self.assertEqual(args.state, Path("firewall.db"))
+        self.assertEqual(args.approval_timeout, 900)
+
+    def test_default_timeout_is_omitted_and_fractions_survive(self):
+        default = dashboard_command(Path("p"), Path("a"), Path("s"))
+        self.assertNotIn("--approval-timeout", default)
+        self.assertEqual(build_parser().parse_args(default[1:]).approval_timeout, 300)
+        fractional = dashboard_command(Path("p"), Path("a"), Path("s"), 2.5)
+        self.assertEqual(
+            build_parser().parse_args(fractional[1:]).approval_timeout, 2.5
+        )
+
+    def test_web_approval_requires_an_audit_path(self):
+        with self.assertRaises(ValueError) as raised:
+            asyncio.run(
+                run_mcp_proxy(
+                    Path("policy.json"),
+                    ["true"],
+                    state_path=Path("firewall.db"),
+                    approve_web=True,
+                )
+            )
+        self.assertIn("--audit", str(raised.exception))

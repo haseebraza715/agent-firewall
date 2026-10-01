@@ -1,3 +1,4 @@
+import ipaddress
 import unittest
 
 from agent_firewall import matchers
@@ -295,6 +296,22 @@ class DomainMatcherTests(unittest.TestCase):
             match({"operator": "domain", "suffix": "example.com"}, "example.com")
         )
 
+    def test_only_a_single_bare_mailbox_matches(self):
+        pattern = {"operator": "domain", "suffix": "corp.example.com"}
+        self.assertTrue(match(pattern, "a@corp.example.com"))
+        for value in (
+            "b@evil.com,a@corp.example.com",
+            "b@evil.com;a@corp.example.com",
+            "b@evil.com a@corp.example.com",
+            "b@evil.com\ta@corp.example.com",
+            "b@evil.com\na@corp.example.com",
+            "Evil <b@evil.com>@corp.example.com",
+            "<a@corp.example.com>",
+            "a@corp.example.com ",
+        ):
+            with self.subTest(value=value):
+                self.assertFalse(match(pattern, value))
+
 
 class HttpMethodMatcherTests(unittest.TestCase):
     def test_equals_is_case_insensitive(self):
@@ -450,6 +467,158 @@ class CommandMatcherTests(unittest.TestCase):
         ):
             with self.subTest(value=value):
                 self.assertFalse(match(pattern, value))
+
+    def test_line_breaks_in_string_values_do_not_match(self):
+        pattern = {"operator": "command", "argv_prefix": ["git"]}
+        for value in (
+            "git status\nrm -rf ~",
+            "git status\r\nrm -rf ~",
+            "\ngit status",
+            "git commit -m hello\nworld",
+        ):
+            with self.subTest(value=value):
+                self.assertFalse(match(pattern, value))
+
+    def test_line_breaks_in_list_elements_do_not_match(self):
+        pattern = {"operator": "command", "argv_prefix": ["git"]}
+        for value in (
+            ["git", "status\nrm -rf ~"],
+            ["git\nstatus"],
+            ["git", "-c", "x=1", "commit\n-m", "msg"],
+        ):
+            with self.subTest(value=value):
+                self.assertFalse(match(pattern, value))
+
+    def test_shell_control_in_list_elements_does_not_match(self):
+        for pattern, value in (
+            ({"operator": "command", "argv_prefix": ["git"]}, ["git", ";"]),
+            ({"operator": "command", "argv_prefix": ["git"]}, ["git", "|"]),
+            (
+                {"operator": "command", "argv_prefix": ["git"]},
+                ["git", "status$(evil)"],
+            ),
+            (
+                {"operator": "command", "argv_prefix": ["sh", "-c"]},
+                ["sh", "-c", "${X}"],
+            ),
+            ({"operator": "command", "executable": "python"}, ["python", "`id`"]),
+        ):
+            with self.subTest(value=value):
+                self.assertFalse(match(pattern, value))
+
+    def test_legit_argv_lists_with_metacharacters_still_match(self):
+        for pattern, value in (
+            (
+                {"operator": "command", "argv_prefix": ["sh", "-c"]},
+                ["sh", "-c", "ls; ls"],
+            ),
+            (
+                {"operator": "command", "argv_prefix": ["find"]},
+                ["find", ".", "-name", "*.txt"],
+            ),
+            (
+                {"operator": "command", "argv_prefix": ["sed"]},
+                ["sed", "s/a;b/c/", "file.txt"],
+            ),
+            ({"operator": "command", "argv_prefix": ["git"]}, ["git", "a;b|c"]),
+        ):
+            with self.subTest(value=value):
+                self.assertTrue(match(pattern, value))
+
+
+class LegacyIpLiteralTests(unittest.TestCase):
+    def test_octal_integer_encoding_is_classified_private(self):
+        self.assertFalse(
+            match(
+                {"operator": "url", "deny_private_networks": True},
+                "http://017700000001/",
+            )
+        )
+
+    def test_decimal_and_hex_integer_encodings_stay_denied(self):
+        for host in ("2130706433", "0x7f000001", "127.1", "0177.0.0.1"):
+            with self.subTest(host=host):
+                self.assertFalse(
+                    match(
+                        {"operator": "url", "deny_private_networks": True},
+                        f"http://{host}/",
+                    )
+                )
+
+    def test_oversized_numeric_hosts_fail_closed_without_raising(self):
+        pattern = {"operator": "url", "deny_private_networks": True}
+        for host in (
+            "1" * 5000,
+            "0x" + "f" * 5000,
+            "0" + "7" * 5000,
+            "1" * 5000 + ".1.1.1",
+            "127." + "0" * 5000 + ".0.1",
+        ):
+            with self.subTest(host=host[:12]):
+                self.assertFalse(match(pattern, f"http://{host}/"))
+        self.assertIsNone(matchers._legacy_integer_value("1" * 5000))
+        self.assertTrue(matchers._is_private_literal("1" * 5000))
+        self.assertIsNone(matchers._decimal_dotted_candidate("1" * 5000 + ".1.1.1"))
+        # The bound does not disturb real legacy encodings or DNS names.
+        self.assertFalse(match(pattern, "http://2130706433/"))
+        self.assertEqual(
+            matchers._as_ip_address("2130706433"),
+            ipaddress.ip_address("127.0.0.1"),
+        )
+        self.assertTrue(match(pattern, "http://" + "a" * 5000 + ".example/"))
+
+    def test_out_of_range_integers_classify_by_wraparound(self):
+        self.assertFalse(
+            match(
+                {"operator": "url", "deny_private_networks": True},
+                "http://7147006462/",
+            )
+        )
+        address = matchers._as_ip_address("99999999999999")
+        self.assertEqual(address, ipaddress.ip_address("16.122.63.255"))
+
+    def test_dotted_quads_with_leading_zeros_classify_both_readings(self):
+        self.assertFalse(
+            match(
+                {"operator": "url", "deny_private_networks": True},
+                "http://010.020.030.040/",
+            )
+        )
+
+
+class StackedSqlStatementTests(unittest.TestCase):
+    def test_statement_separator_with_trailing_statement_never_matches(self):
+        rule = {"operator": "sql", "in": ["SELECT"]}
+        stacked = (
+            "/* nightly cleanup */\n"
+            "SELECT id FROM sessions LIMIT 1;\n"
+            "DELETE FROM sessions;"
+        )
+        for statement in (
+            stacked,
+            "SELECT 1; DELETE FROM t",
+            "SELECT 1;\nDROP TABLE x",
+            "-- lead\nSELECT 1 ; UPDATE t SET a=1",
+            "WITH x AS (SELECT 1) SELECT * FROM x; VACUUM",
+        ):
+            with self.subTest(statement=statement):
+                self.assertFalse(match(rule, statement))
+
+    def test_single_statements_with_trailing_semicolon_still_match(self):
+        rule = {"operator": "sql", "equals": "select"}
+        for statement in (
+            "SELECT 1",
+            "SELECT 1;",
+            "SELECT 1 ; ",
+            "/* c */ SELECT a FROM t;",
+        ):
+            with self.subTest(statement=statement):
+                self.assertTrue(match(rule, statement))
+
+    def test_quoted_semicolons_fail_closed(self):
+        self.assertFalse(
+            match({"operator": "sql", "equals": "select"}, "SELECT ';' ; DELETE t")
+        )
 
 
 class ScalarBehaviourPreservationTests(unittest.TestCase):

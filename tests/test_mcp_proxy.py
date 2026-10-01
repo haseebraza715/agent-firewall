@@ -1,5 +1,7 @@
 import json
 import os
+import re
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -9,6 +11,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 from agent_firewall import Firewall, JsonlAuditLog, Policy, SQLiteApprovalQueue
+from agent_firewall.cli import build_parser
 from agent_firewall.jsonrpc import encode_message, request_key
 from agent_firewall.mcp_proxy import McpRequestTimeoutError, McpStdioProxy
 
@@ -72,6 +75,76 @@ class McpProxyTests(unittest.TestCase):
 
         self.assertEqual(process.returncode, 0, stderr)
         return [json.loads(line) for line in stdout.splitlines()]
+
+    def test_method_contract_with_child_receipts(self):
+        aliases = [
+            "TOOLS/CALL",
+            "Tools/Call",
+            " tools/call",
+            "tools/call ",
+            "tools / call",
+            "tools//call",
+            "\tTOOLS///CALL\n",
+        ]
+        passthrough = [
+            "initialize",
+            "tools/list",
+            "resources/read",
+            "prompts/get",
+            "vendor/tools/call",
+            "tools/callback",
+            "tools/call/extension",
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            receipts = Path(directory) / "receipts.jsonl"
+            child = (
+                "import json,sys\n"
+                "for line in sys.stdin:\n"
+                "    m=json.loads(line)\n"
+                f"    with open({str(receipts)!r}, 'a') as f:\n"
+                "        f.write(json.dumps(m)+'\\n')\n"
+                "    if 'id' in m:\n"
+                "        print(json.dumps({'jsonrpc':'2.0','id':m['id'],"
+                "'result':{'method':m['method'],'params':m.get('params')}}),"
+                "flush=True)\n"
+            )
+            methods = ["tools/call", *aliases, *passthrough]
+            messages = [
+                {
+                    "jsonrpc": "2.0",
+                    "id": i,
+                    "method": method,
+                    "params": {"name": "danger", "arguments": {"marker": i}},
+                }
+                for i, method in enumerate(methods)
+            ]
+            messages.extend(
+                {"jsonrpc": "2.0", "method": method, "params": {}}
+                for method in [*aliases, "notifications/initialized"]
+            )
+            responses = self.run_proxy(
+                {"default_decision": "block"},
+                messages,
+                child_command=[sys.executable, "-c", child],
+            )
+            by_id = {response["id"]: response for response in responses}
+            self.assertEqual(len(responses), len(methods))
+            self.assertEqual(by_id[0]["error"]["code"], -32001)
+            for i in range(1, 1 + len(aliases)):
+                self.assertEqual(by_id[i]["error"]["code"], -32601)
+            for i in range(1 + len(aliases), len(methods)):
+                self.assertEqual(
+                    by_id[i]["result"],
+                    {
+                        "method": methods[i],
+                        "params": messages[i]["params"],
+                    },
+                )
+            delivered = [json.loads(line) for line in receipts.read_text().splitlines()]
+            self.assertCountEqual(
+                [m["method"] for m in delivered],
+                [*passthrough, "notifications/initialized"],
+            )
 
     def test_non_tool_requests_pass_through(self):
         responses = self.run_proxy(
@@ -419,7 +492,7 @@ class McpProxyTests(unittest.TestCase):
             "require_approval",
         )
 
-    def test_tools_call_with_null_arguments_is_policed(self):
+    def test_tools_call_with_null_arguments_is_rejected(self):
         responses = self.run_proxy(
             {
                 "default_decision": "block",
@@ -436,13 +509,10 @@ class McpProxyTests(unittest.TestCase):
             server=TOLERANT_SERVER,
         )
 
-        self.assertEqual(responses[0]["error"]["code"], -32001)
-        self.assertEqual(
-            responses[0]["error"]["data"]["decision"],
-            "require_approval",
-        )
+        self.assertEqual(responses[0]["error"]["code"], -32602)
+        self.assertNotIn("EXECUTED", json.dumps(responses))
 
-    def test_tools_call_with_non_object_arguments_is_policed(self):
+    def test_tools_call_with_non_object_arguments_is_rejected(self):
         responses = self.run_proxy(
             {
                 "default_decision": "block",
@@ -459,13 +529,10 @@ class McpProxyTests(unittest.TestCase):
             server=TOLERANT_SERVER,
         )
 
-        self.assertEqual(responses[0]["error"]["code"], -32001)
-        self.assertEqual(
-            responses[0]["error"]["data"]["decision"],
-            "require_approval",
-        )
+        self.assertEqual(responses[0]["error"]["code"], -32602)
+        self.assertNotIn("EXECUTED", json.dumps(responses))
 
-    def test_tools_call_with_null_arguments_allowed_by_name_rule_runs(self):
+    def test_name_only_allow_rule_does_not_rescue_malformed_arguments(self):
         responses = self.run_proxy(
             {
                 "default_decision": "block",
@@ -482,8 +549,8 @@ class McpProxyTests(unittest.TestCase):
             server=TOLERANT_SERVER,
         )
 
-        self.assertIn("result", responses[0])
-        self.assertIn("EXECUTED", responses[0]["result"]["content"][0]["text"])
+        self.assertEqual(responses[0]["error"]["code"], -32602)
+        self.assertNotIn("EXECUTED", json.dumps(responses))
 
     def test_tools_call_with_non_object_params_is_rejected(self):
         responses = self.run_proxy(
@@ -614,11 +681,114 @@ class McpProxyTests(unittest.TestCase):
         self.assertIn("error", response)
         self.assertEqual(response["error"]["code"], -32003)
 
+    def test_lifecycle_lines_reach_stderr(self):
+        with tempfile.TemporaryDirectory() as directory:
+            policy_path = Path(directory) / "policy.json"
+            policy_path.write_text('{"default_decision": "block"}', encoding="utf-8")
+            env = dict(os.environ)
+            env["PYTHONPATH"] = str(ROOT / "src")
+            process = subprocess.Popen(
+                [
+                    sys.executable,
+                    "-m",
+                    "agent_firewall",
+                    "mcp",
+                    "--policy",
+                    str(policy_path),
+                    "--request-timeout",
+                    "2",
+                    "--",
+                    sys.executable,
+                    str(FAKE_SERVER),
+                    "--api-token",
+                    "sk-live-SECRET-token",
+                ],
+                cwd=ROOT,
+                env=env,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            request = {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {},
+            }
+            stdout, stderr = process.communicate(json.dumps(request) + "\n", timeout=5)
+
+        self.assertEqual(process.returncode, 0, stderr)
+        spawned = [line for line in stderr.splitlines() if "spawned" in line]
+        self.assertEqual(len(spawned), 1)
+        self.assertRegex(
+            spawned[0],
+            rf"^agent-firewall: spawned {re.escape(Path(sys.executable).name)} "
+            r"\(pid \d+\)$",
+        )
+        self.assertNotIn("SECRET", stderr)
+        self.assertNotIn(str(FAKE_SERVER), stderr)
+        self.assertIn("child exited rc=0", stderr)
+
+    def test_held_without_approver_prints_restart_hint_on_stderr(self):
+        with tempfile.TemporaryDirectory() as directory:
+            policy_path = Path(directory) / "policy.json"
+            policy_path.write_text(
+                json.dumps(
+                    {
+                        "default_decision": "block",
+                        "rules": [
+                            {
+                                "tool": "anything",
+                                "decision": "require_approval",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            env = dict(os.environ)
+            env["PYTHONPATH"] = str(ROOT / "src")
+            process = subprocess.Popen(
+                [
+                    sys.executable,
+                    "-m",
+                    "agent_firewall",
+                    "mcp",
+                    "--policy",
+                    str(policy_path),
+                    "--request-timeout",
+                    "2",
+                    "--",
+                    sys.executable,
+                    str(TOLERANT_SERVER),
+                ],
+                cwd=ROOT,
+                env=env,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            held = {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {"name": "anything", "arguments": {}},
+            }
+            stdout, stderr = process.communicate(json.dumps(held) + "\n", timeout=5)
+
+        response = json.loads(stdout.splitlines()[0])
+        self.assertEqual(response["error"]["code"], -32001)
+        self.assertIn("--approve-terminal", stderr)
+        self.assertIn("--approve-web", stderr)
+
     def test_web_approval_unblocks_waiting_tool_call(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             policy_path = root / "policy.json"
             state_path = root / "firewall.db"
+            audit_path = root / "audit.jsonl"
             policy_path.write_text(
                 json.dumps(
                     {
@@ -643,6 +813,8 @@ class McpProxyTests(unittest.TestCase):
                     "mcp",
                     "--policy",
                     str(policy_path),
+                    "--audit",
+                    str(audit_path),
                     "--state",
                     str(state_path),
                     "--approve-web",
@@ -687,6 +859,14 @@ class McpProxyTests(unittest.TestCase):
         response = json.loads(stdout)
         self.assertEqual(response["id"], 9)
         self.assertIn("result", response)
+        hint = next(line for line in stderr.splitlines() if "start it with: " in line)
+        printed = shlex.split(hint.split("start it with: ", 1)[1])
+        self.assertEqual(printed[0], "agent-firewall")
+        dashboard_args = build_parser().parse_args(printed[1:])
+        self.assertEqual(dashboard_args.command, "dashboard")
+        self.assertEqual(dashboard_args.audit, audit_path)
+        self.assertEqual(dashboard_args.state, state_path)
+        self.assertEqual(dashboard_args.approval_timeout, 2)
 
     def test_request_timeout_fails_call_closed(self):
         child = (
@@ -806,6 +986,91 @@ class McpProxyTests(unittest.TestCase):
         fast_lines = [line for line in lines if line.get("id") == "fast"]
         self.assertEqual(len(fast_lines), 1)
         self.assertIn("result", fast_lines[0])
+
+    def test_duplicate_key_child_response_is_dropped_and_request_fails_closed(self):
+        dup_child = (
+            "import json,sys\n"
+            "for line in sys.stdin:\n"
+            "    try:\n"
+            "        m = json.loads(line)\n"
+            "    except Exception:\n"
+            "        continue\n"
+            "    if not isinstance(m, dict) or 'id' not in m:\n"
+            "        continue\n"
+            "    rid = json.dumps(m['id'])\n"
+            "    params = m.get('params')\n"
+            "    clean = isinstance(params, dict) and params.get('mode') == 'clean'\n"
+            "    if clean:\n"
+            '        body = \'{"jsonrpc":"2.0","id":%s,"result":{"r":1}}\' % rid\n'
+            "    else:\n"
+            '        body = (\'{"jsonrpc":"2.0","id":%s,"result":{"r":1},\'\n'
+            '                \'"result":{"r":2}}\') % rid\n'
+            "    sys.stdout.write(body + '\\n')\n"
+            "    sys.stdout.flush()\n"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            policy_path = Path(directory) / "policy.json"
+            policy_path.write_text('{"default_decision": "allow"}', encoding="utf-8")
+            child_path = Path(directory) / "dup_child.py"
+            child_path.write_text(dup_child, encoding="utf-8")
+            env = dict(os.environ)
+            env["PYTHONPATH"] = str(ROOT / "src")
+            process = subprocess.Popen(
+                [
+                    sys.executable,
+                    "-m",
+                    "agent_firewall",
+                    "mcp",
+                    "--policy",
+                    str(policy_path),
+                    "--request-timeout",
+                    "0.3",
+                    "--",
+                    sys.executable,
+                    str(child_path),
+                ],
+                cwd=ROOT,
+                env=env,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            ambiguous = {
+                "jsonrpc": "2.0",
+                "id": "amb",
+                "method": "tools/call",
+                "params": {"name": "database.query", "arguments": {}},
+            }
+            process.stdin.write(json.dumps(ambiguous) + "\n")
+            process.stdin.flush()
+            timeout_response = json.loads(process.stdout.readline())
+            self.assertEqual(timeout_response["id"], "amb")
+            self.assertEqual(timeout_response["error"]["code"], -32002)
+            clean = {
+                "jsonrpc": "2.0",
+                "id": "clean",
+                "method": "tools/call",
+                "params": {"name": "database.query", "mode": "clean"},
+            }
+            process.stdin.write(json.dumps(clean) + "\n")
+            process.stdin.flush()
+            process.stdin.close()
+            stdout = process.stdout.read()
+            stderr = process.stderr.read()
+            status = process.wait(timeout=5)
+            process.stdout.close()
+            process.stderr.close()
+
+        self.assertEqual(status, 0, stderr)
+        lines = [json.loads(line) for line in stdout.splitlines()]
+        self.assertNotIn("agent-firewall:", stdout)
+        by_id = {line.get("id"): line for line in lines}
+        self.assertIn("clean", by_id)
+        self.assertIn("result", by_id["clean"])
+        # The ambiguous response was dropped, never forwarded after the
+        # timeout error was already answered above.
+        self.assertNotIn("amb", {line.get("id") for line in lines})
 
     def test_client_can_reuse_id_after_timeout_without_accepting_late_response(self):
         with tempfile.TemporaryDirectory() as directory:

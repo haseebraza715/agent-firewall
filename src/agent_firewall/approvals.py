@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import sqlite3
 import time
 from contextlib import closing
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -48,7 +49,12 @@ class SQLiteApprovalQueue:
         timeout_seconds: float = 300,
         poll_seconds: float = 0.25,
     ) -> None:
-        if timeout_seconds <= 0 or poll_seconds <= 0:
+        if (
+            not math.isfinite(timeout_seconds)
+            or timeout_seconds <= 0
+            or not math.isfinite(poll_seconds)
+            or poll_seconds <= 0
+        ):
             raise ValueError("approval timeout and poll interval must be positive")
         self.path = path
         self.timeout_seconds = timeout_seconds
@@ -86,7 +92,14 @@ class SQLiteApprovalQueue:
             )
         return self.get(call.id)
 
-    def pending(self) -> list[ApprovalRecord]:
+    def pending(self, max_age_seconds: float | None = None) -> list[ApprovalRecord]:
+        """List undecided requests, oldest request first.
+
+        With ``max_age_seconds``, rows older than the window are hidden: they
+        belong to a dead proxy whose wait loop can no longer consume them.
+        Rows with an unparseable timestamp stay visible so nothing silently
+        disappears from the operator's view.
+        """
         with closing(self._connect()) as connection:
             rows = connection.execute(
                 """
@@ -96,7 +109,24 @@ class SQLiteApprovalQueue:
                 ORDER BY requested_at
                 """
             ).fetchall()
-        return [ApprovalRecord(*row) for row in rows]
+        cutoff = None
+        if max_age_seconds is not None:
+            cutoff = datetime.now(timezone.utc) - timedelta(seconds=max_age_seconds)
+        records = []
+        for row in rows:
+            record = ApprovalRecord(*row)
+            if cutoff is not None and record.decided_at is None:
+                try:
+                    requested_at = datetime.fromisoformat(record.requested_at)
+                except (ValueError, TypeError):
+                    records.append(record)
+                    continue
+                if requested_at.tzinfo is None:
+                    requested_at = requested_at.replace(tzinfo=timezone.utc)
+                if requested_at < cutoff:
+                    continue
+            records.append(record)
+        return records
 
     def get(self, call_id: str) -> ApprovalRecord:
         with closing(self._connect()) as connection:

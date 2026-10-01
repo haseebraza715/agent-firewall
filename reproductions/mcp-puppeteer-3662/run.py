@@ -175,10 +175,7 @@ def browser_environment() -> dict[str, str]:
         raise RuntimeError(
             "set PUPPETEER_EXECUTABLE_PATH to an installed Chrome or Chromium binary"
         )
-    environment["PUPPETEER_LAUNCH_OPTIONS"] = json.dumps(
-        {"headless": True, "executablePath": executable},
-        separators=(",", ":"),
-    )
+    environment["PUPPETEER_EXECUTABLE_PATH"] = executable
     return environment
 
 
@@ -188,17 +185,25 @@ def call_navigation(
     client = McpClient(command, environment)
     try:
         client.initialize()
-        return client.request(
+        response = client.request(
             2,
             "tools/call",
             {"name": "puppeteer_navigate", "arguments": {"url": url}},
         )
     finally:
         client.close()
+    return {"response": response, "stderr": client.stderr}
+
+
+def tool_succeeded(response: dict[str, Any]) -> bool:
+    result = response.get("result")
+    return isinstance(result, dict) and not result.get("isError", False)
 
 
 def main() -> int:
     EVIDENCE.unlink(missing_ok=True)
+    failure_path = HERE / "failure.json"
+    failure_path.unlink(missing_ok=True)
     if not SERVER_JS.is_file():
         print(
             "error: run ./run.sh first so npm can install the pinned package",
@@ -220,7 +225,8 @@ def main() -> int:
     child = ["node", str(SERVER_JS)]
 
     try:
-        unguarded = call_navigation(child, prohibited_url, environment)
+        unguarded_diagnostics = call_navigation(child, prohibited_url, environment)
+        unguarded = unguarded_diagnostics["response"]
         unguarded_hits = ProbeHandler.hit_count("/latest/meta-data/")
         ProbeHandler.reset_hits()
         guarded_command = [
@@ -283,9 +289,9 @@ def main() -> int:
     prohibited_data = prohibited.get("error", {}).get("data", {})
     repetition_data = repeat_second.get("error", {}).get("data", {})
     passed = (
-        "result" in unguarded
+        tool_succeeded(unguarded)
         and unguarded_hits >= 1
-        and "result" in safe
+        and tool_succeeded(safe)
         and safe_hits >= 1
         and approval.get("error", {}).get("code") == -32001
         and approval_data.get("decision") == "require_approval"
@@ -293,7 +299,7 @@ def main() -> int:
         and prohibited.get("error", {}).get("code") == -32001
         and prohibited_data.get("decision") == "block"
         and prohibited_hits == 0
-        and "result" in repeat_first
+        and tool_succeeded(repeat_first)
         and repeat_hits_after_first >= 1
         and repeat_second.get("error", {}).get("code") == -32001
         and repetition_data.get("code") == "max_identical_calls"
@@ -301,6 +307,12 @@ def main() -> int:
     )
     evidence = {
         "schema_version": 1,
+        "diagnostics": {
+            "unguarded": unguarded_diagnostics,
+            "guarded_stderr": client.stderr,
+            "safe_response": safe,
+            "first_repetition_response": repeat_first,
+        },
         "kind": "safe-end-to-end-integration",
         "source_issue": ISSUE_URL,
         "upstream_repository": "https://github.com/modelcontextprotocol/servers-archived",
@@ -316,12 +328,12 @@ def main() -> int:
         },
         "unguarded": {
             "endpoint_hits": unguarded_hits,
-            "executed": "result" in unguarded,
+            "executed": tool_succeeded(unguarded),
         },
         "guarded": {
             "safe_call": {
                 "endpoint_hits": safe_hits,
-                "executed": "result" in safe,
+                "executed": tool_succeeded(safe),
             },
             "approval_call": {
                 "decision": approval_data.get("decision"),
@@ -336,7 +348,7 @@ def main() -> int:
                 "jsonrpc_error_code": prohibited.get("error", {}).get("code"),
             },
             "repetition_budget": {
-                "first_call_executed": "result" in repeat_first,
+                "first_call_executed": tool_succeeded(repeat_first),
                 "hits_after_first": repeat_hits_after_first,
                 "hits_after_second": repeat_hits_after_second,
                 "second_call_decision_code": repetition_data.get("code"),
@@ -351,8 +363,8 @@ def main() -> int:
         ),
     }
     rendered = json.dumps(evidence, indent=2, sort_keys=True)
-    if passed:
-        EVIDENCE.write_text(rendered + "\n", encoding="utf-8")
+    result_path = EVIDENCE if passed else failure_path
+    result_path.write_text(rendered + "\n", encoding="utf-8")
     print(rendered)
     return 0 if passed else 1
 

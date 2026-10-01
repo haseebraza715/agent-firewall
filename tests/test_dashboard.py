@@ -129,6 +129,8 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, 403)
 
     def test_page_has_restrictive_security_headers(self):
+        from agent_firewall import __version__
+
         with urlopen(self.dashboard.address + "/", timeout=2) as response:
             page = response.read().decode("utf-8")
             policy = response.headers["Content-Security-Policy"]
@@ -137,7 +139,38 @@ class DashboardTests(unittest.TestCase):
         self.assertIn("Agent Firewall", page)
         self.assertIn("default-src 'none'", policy)
         self.assertEqual(response.headers["X-Frame-Options"], "DENY")
-        self.assertTrue(server.startswith("AgentFirewall/0.3.0"))
+        self.assertTrue(server.startswith(f"AgentFirewall/{__version__}"))
+
+    def test_startup_banner_includes_url_and_token(self):
+        banner = self.dashboard.startup_banner()
+        self.assertIn(self.dashboard.address, banner)
+        self.assertIn("token: test-token", banner)
+
+    def test_page_exposes_decision_error_surface_and_focus_hooks(self):
+        with urlopen(self.dashboard.address + "/", timeout=2) as response:
+            page = response.read().decode("utf-8")
+
+        self.assertIn('id="alert" role="alert"', page)
+        self.assertIn('id="updated"', page)
+        self.assertIn("res.ok", page)
+        self.assertIn("dataset.cid", page)
+        self.assertIn("dataset.decision", page)
+        self.assertIn(".focus()", page)
+
+    def test_summary_counts_hidden_stale_approvals(self):
+        import sqlite3
+
+        connection = sqlite3.connect(str(self.dashboard.approvals.path))
+        held = self.add_pending_approval()
+        connection.execute(
+            "UPDATE approvals SET requested_at = ? WHERE call_id = ?",
+            ("2000-01-01T00:00:00+00:00", held.id),
+        )
+        connection.commit()
+        connection.close()
+        summary = json.load(urlopen(self.dashboard.address + "/api/summary", timeout=2))
+        self.assertEqual(summary["pending_approvals"], 0)
+        self.assertEqual(summary["hidden_pending"], 1)
 
     def test_foreign_host_header_is_rejected(self):
         request = Request(

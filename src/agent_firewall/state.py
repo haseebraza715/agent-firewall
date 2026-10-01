@@ -9,7 +9,7 @@ from threading import Lock
 from typing import Protocol
 
 from .exceptions import StorageError
-from .models import Decision, DecisionKind, ToolCall, Usage
+from .models import Decision, ToolCall, Usage
 from .policy import Policy
 
 
@@ -47,9 +47,7 @@ class MemoryStateStore:
     ) -> StateResult:
         with self._lock:
             decision = policy.evaluate(call, self._usage)
-            if decision.kind is DecisionKind.ALLOW or (
-                approved and decision.kind is not DecisionKind.BLOCK
-            ):
+            if decision.reserves_usage(approved):
                 self._usage.record(call)
             return StateResult(decision, self._usage.copy())
 
@@ -80,9 +78,7 @@ class SQLiteStateStore:
             connection.execute("BEGIN IMMEDIATE")
             usage = self._load_usage(connection)
             decision = policy.evaluate(call, usage)
-            if decision.kind is DecisionKind.ALLOW or (
-                approved and decision.kind is not DecisionKind.BLOCK
-            ):
+            if decision.reserves_usage(approved):
                 self._record(connection, usage, call)
             connection.commit()
             return StateResult(decision, usage)
@@ -139,18 +135,25 @@ class SQLiteStateStore:
         row = connection.execute(
             "SELECT tool_calls, estimated_cost_usd FROM run_usage WHERE id = 1"
         ).fetchone()
-        if row is None or not isinstance(row[0], int):
+        if row is None or not isinstance(row[0], int) or row[0] < 0:
             raise StorageError("firewall state is missing or corrupted")
         try:
             estimated_cost_usd = Decimal(row[1])
         except (InvalidOperation, TypeError, ValueError) as exc:
             raise StorageError("firewall state cost record is corrupted") from exc
+        if not estimated_cost_usd.is_finite() or estimated_cost_usd < 0:
+            raise StorageError("firewall state cost record is corrupted")
         tools: dict[str, int] = dict(
             connection.execute("SELECT tool, call_count FROM tool_usage")
         )
         fingerprints: dict[str, int] = dict(
             connection.execute("SELECT fingerprint, call_count FROM fingerprint_usage")
         )
+        if any(
+            not isinstance(count, int) or count < 0
+            for count in (*tools.values(), *fingerprints.values())
+        ):
+            raise StorageError("firewall state count record is corrupted")
         return Usage(
             tool_calls=row[0],
             estimated_cost_usd=estimated_cost_usd,

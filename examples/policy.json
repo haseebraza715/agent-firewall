@@ -11,18 +11,16 @@
     {
       "tool": "database.query",
       "decision": "allow",
-      "reason": "read-only database queries are allowed"
-    },
-    {
-      "tool": "email.*",
+      "reason": "single SELECT statements are allowed; database permissions must enforce read-only access",
       "arguments": {
-        "to": "*@mycompany.com"
-      },
-      "decision": "allow",
-      "reason": "company email recipients are pre-approved"
+        "query": {
+          "operator": "sql",
+          "equals": "SELECT"
+        }
+      }
     },
     {
-      "tool": "email.*",
+      "tool": "email.send",
       "decision": "require_approval",
       "reason": "outbound email requires a human decision"
     },
@@ -34,7 +32,13 @@
     {
       "tool": "filesystem.read",
       "decision": "allow",
-      "reason": "read-only file access is allowed"
+      "reason": "file reads lexically within /workspace are allowed; symlinks are not resolved",
+      "arguments": {
+        "path": {
+          "operator": "path",
+          "within": "/workspace"
+        }
+      }
     },
     {
       "tool": "search.web",
@@ -43,8 +47,8 @@
     },
     {
       "tool": "shell.run",
-      "decision": "allow",
-      "reason": "demo shell calls are constrained by repetition budgets"
+      "decision": "require_approval",
+      "reason": "every shell command requires review; repetition budgets do not establish command safety"
     },
     {
       "tool": "model.generate",

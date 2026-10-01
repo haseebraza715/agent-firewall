@@ -94,5 +94,51 @@ class SQLiteStateStoreTests(unittest.TestCase):
             self.assertEqual(firewall.usage.tool_calls, 1)
 
 
+class ApprovedCallReservationTests(unittest.TestCase):
+    """Approved held calls must consume budgets in every store backend."""
+
+    POLICY = {
+        "default_decision": "block",
+        "rules": [
+            {"tool": "email.send", "decision": "require_approval"},
+            {"tool": "*", "decision": "allow"},
+        ],
+        "budget": {"max_calls": 1},
+    }
+
+    def _approve(self, call, decision):
+        return True
+
+    def test_approved_call_consumes_sqlite_budget(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "firewall.db"
+            policy = Policy.from_dict(self.POLICY)
+            firewall = Firewall(
+                policy,
+                approver=self._approve,
+                state_store=SQLiteStateStore(path),
+            )
+
+            self.assertEqual(firewall.call("email.send", lambda: "sent"), "sent")
+            with self.assertRaises(ToolCallBlocked):
+                firewall.call("search", lambda: "second")
+            self.assertEqual(firewall.usage.tool_calls, 1)
+
+    def test_approved_call_consumes_memory_budget(self):
+        from agent_firewall import MemoryStateStore
+
+        policy = Policy.from_dict(self.POLICY)
+        firewall = Firewall(
+            policy,
+            approver=self._approve,
+            state_store=MemoryStateStore(),
+        )
+
+        self.assertEqual(firewall.call("email.send", lambda: "sent"), "sent")
+        with self.assertRaises(ToolCallBlocked):
+            firewall.call("search", lambda: "second")
+        self.assertEqual(firewall.usage.tool_calls, 1)
+
+
 if __name__ == "__main__":
     unittest.main()

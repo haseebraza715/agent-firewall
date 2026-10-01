@@ -168,6 +168,20 @@ class LintRenderingTests(unittest.TestCase):
         policy = Policy.load(root / "examples" / "policy.json")
         self.assertEqual(lint_policy(policy), [])
 
+    def test_demo_policy_lints_clean(self):
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parents[1]
+        policy = Policy.load(root / "examples" / "demo_policy.json")
+        self.assertEqual(
+            [
+                finding.code
+                for finding in lint_policy(policy)
+                if finding.severity == "error"
+            ],
+            [],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
