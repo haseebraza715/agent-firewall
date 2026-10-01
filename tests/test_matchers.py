@@ -545,6 +545,28 @@ class LegacyIpLiteralTests(unittest.TestCase):
                     )
                 )
 
+    def test_oversized_numeric_hosts_fail_closed_without_raising(self):
+        pattern = {"operator": "url", "deny_private_networks": True}
+        for host in (
+            "1" * 5000,
+            "0x" + "f" * 5000,
+            "0" + "7" * 5000,
+            "1" * 5000 + ".1.1.1",
+            "127." + "0" * 5000 + ".0.1",
+        ):
+            with self.subTest(host=host[:12]):
+                self.assertFalse(match(pattern, f"http://{host}/"))
+        self.assertIsNone(matchers._legacy_integer_value("1" * 5000))
+        self.assertTrue(matchers._is_private_literal("1" * 5000))
+        self.assertIsNone(matchers._decimal_dotted_candidate("1" * 5000 + ".1.1.1"))
+        # The bound does not disturb real legacy encodings or DNS names.
+        self.assertFalse(match(pattern, "http://2130706433/"))
+        self.assertEqual(
+            matchers._as_ip_address("2130706433"),
+            ipaddress.ip_address("127.0.0.1"),
+        )
+        self.assertTrue(match(pattern, "http://" + "a" * 5000 + ".example/"))
+
     def test_out_of_range_integers_classify_by_wraparound(self):
         self.assertFalse(
             match(

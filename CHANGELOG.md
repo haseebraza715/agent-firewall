@@ -10,6 +10,9 @@
 - The MCP proxy explains held calls on stderr: with no approver configured it
   says to restart with `--approve-terminal` or `--approve-web`; with
   `--approve-web` it prints the exact dashboard start command at startup.
+- `deny_private_networks` no longer raises on numeric hosts with thousands
+  of digits (the interpreter's integer-string digit limit); spellings too
+  long for any address encoding are denied instead.
 - `mcp --approve-web` now requires `--audit` as well as `--state`, so the
   printed dashboard command always starts; the command also carries
   `--approval-timeout` whenever the proxy's hold window is not the default.

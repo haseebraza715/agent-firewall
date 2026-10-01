@@ -388,6 +388,12 @@ def _is_private_literal(hostname: str | None) -> bool:
     if hostname is None:
         return False
     hostname = hostname.split("%", 1)[0]
+    if _oversized_numeric_spelling(hostname):
+        # No address encoding needs this many digits, and resolvers disagree
+        # about what to do with them (darwin wraps, glibc tries DNS). Treat
+        # the spelling as private rather than converting an attacker-sized
+        # integer: over-blocking it is harmless.
+        return True
     primary = _as_ip_address(hostname)
     if primary is not None and not primary.is_global:
         return True
@@ -400,6 +406,8 @@ def _decimal_dotted_candidate(hostname: str) -> ipaddress.IPv4Address | None:
     decimal; classify the decimal reading too."""
     parts = hostname.split(".")
     if len(parts) != 4 or not all(part.isascii() and part.isdigit() for part in parts):
+        return None
+    if any(len(part) > _LEGACY_INTEGER_MAX_DIGITS for part in parts):
         return None
     normalized = ".".join(str(int(part)) for part in parts)
     try:
@@ -433,7 +441,14 @@ def _as_ip_address(
         return None
 
 
-def _legacy_integer_value(text: str) -> int | None:
+# A 32-bit address needs at most 10 decimal, 11 octal or 8 hex digits; the
+# bound leaves room for wraparound spellings while keeping ``int()`` away from
+# the interpreter's integer-string digit limit.
+_LEGACY_INTEGER_MAX_DIGITS = 32
+
+
+def _legacy_integer_syntax(text: str) -> tuple[str, int] | None:
+    """Split a legacy integer spelling into (digits, base), or None."""
     base = 10
     digits = text
     if text[:2].lower() == "0x":
@@ -449,7 +464,29 @@ def _legacy_integer_value(text: str) -> int | None:
     )
     if not digits or any(char not in allowed for char in digits):
         return None
+    return digits, base
+
+
+def _legacy_integer_value(text: str) -> int | None:
+    syntax = _legacy_integer_syntax(text)
+    if syntax is None or len(syntax[0]) > _LEGACY_INTEGER_MAX_DIGITS:
+        return None
+    digits, base = syntax
     return int(digits, base)
+
+
+def _oversized_numeric_spelling(hostname: str) -> bool:
+    """True when every dotted part is a legacy integer and one is too long
+    to be any address encoding."""
+    parts = hostname.split(".")
+    syntaxes = [_legacy_integer_syntax(part) for part in parts]
+    if any(syntax is None for syntax in syntaxes):
+        return False
+    return any(
+        len(syntax[0]) > _LEGACY_INTEGER_MAX_DIGITS
+        for syntax in syntaxes
+        if syntax is not None
+    )
 
 
 def _match_path(pattern: dict[str, Any], value: Any) -> bool:
